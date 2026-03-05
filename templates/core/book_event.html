@@ -1,0 +1,189 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Book Event | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>Book Event</h1>
+    <p>Complete booking details and continue to payment.</p>
+  </section>
+
+  <section class="split-grid">
+    <div class="card">
+      <h2>{{ event.title }}</h2>
+      <p><strong>Category:</strong> {{ event.category }}</p>
+      <p><strong>Location:</strong> {{ event.location }}</p>
+      <p><strong>Date:</strong> {{ event.date|date_human }} | {{ event.time }}</p>
+      <p><strong>Price per ticket:</strong> {{ event.price|money }}</p>
+      {% if show_role_choice %}
+        <div class="role-slot-box">
+          <p class="muted"><strong>Role Slots</strong></p>
+          {% if role_slots.active_activities %}
+            {% for activity in role_slots.active_activities %}
+              <p class="muted">
+                Active Participant ({{ activity.name }}):
+                {{ activity.applied }}/{{ activity.required }}
+              </p>
+            {% endfor %}
+          {% endif %}
+          {% if role_slots.helper_activities %}
+            {% for helper_activity in role_slots.helper_activities %}
+              <p class="muted">
+                Organizer Help ({{ helper_activity.name }}):
+                {{ helper_activity.applied }}/{{ helper_activity.required }}
+              </p>
+            {% endfor %}
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Booking Form</h2>
+      <form action="{% url 'book_event' event.id %}" method="post">
+        {% csrf_token %}
+        <label for="book-attendee-name">Attendee Name</label>
+        <input
+          id="book-attendee-name"
+          name="attendeeName"
+          type="text"
+          value="{{ request.user.first_name|default:request.user.username }}"
+          title="Attendee Name"
+          placeholder="Enter attendee name"
+          required
+        />
+        <p class="muted"><strong>Ticket:</strong> 1 (fixed per user)</p>
+        {% if show_role_choice %}
+          <label for="application-role-attendee">Apply Role</label>
+          <div class="role-choice-list">
+            <label class="radio-row" for="application-role-attendee">
+              <input id="application-role-attendee" type="radio" name="applicationRole" value="attendee" title="Audience Ticket" {% if selected_application_role == 'attendee' %}checked{% endif %} />
+              Audience Ticket
+            </label>
+            {% if role_slots.active_participant.required > 0 %}
+              <label class="radio-row{% if not role_slots.active_participant.available %} is-disabled{% endif %}" for="application-role-active-participant">
+                <input
+                  id="application-role-active-participant"
+                  type="radio"
+                  name="applicationRole"
+                  value="active_participant"
+                  title="Active Participant"
+                  {% if selected_application_role == 'active_participant' %}checked{% endif %}
+                  {% if not role_slots.active_participant.available %}disabled{% endif %}
+                />
+                Active Participant
+                <span class="muted">
+                  ({{ role_slots.active_participant.applied }}/{{ role_slots.active_participant.required }})
+                </span>
+              </label>
+              {% if role_slots.active_activities %}
+                <div id="active-activity-group" class="active-activity-group{% if selected_application_role != 'active_participant' %} is-hidden{% endif %}">
+                  <label for="active-activity-id" class="muted">Choose Activity</label>
+                  <select
+                    id="active-activity-id"
+                    name="activeActivityId"
+                    title="Choose Activity"
+                    {% if selected_application_role != 'active_participant' %}disabled{% endif %}
+                  >
+                    {% for activity in role_slots.active_activities %}
+                      {% if activity.id %}
+                        <option
+                          value="{{ activity.id }}"
+                          {% if selected_active_activity_id == activity.id|stringformat:"s" %}selected{% endif %}
+                          {% if not activity.available %}disabled{% endif %}
+                        >
+                          {{ activity.name }} ({{ activity.applied }}/{{ activity.required }})
+                        </option>
+                      {% endif %}
+                    {% endfor %}
+                  </select>
+                  <p class="muted">Each activity has separate slots. Select one to register.</p>
+                </div>
+              {% endif %}
+            {% endif %}
+            {% if role_slots.helper_team.required > 0 %}
+              <label class="radio-row{% if not role_slots.helper_team.available %} is-disabled{% endif %}" for="application-role-helper-team">
+                <input
+                  id="application-role-helper-team"
+                  type="radio"
+                  name="applicationRole"
+                  value="helper_team"
+                  title="Helper Team"
+                  {% if selected_application_role == 'helper_team' %}checked{% endif %}
+                  {% if not role_slots.helper_team.available %}disabled{% endif %}
+                />
+                Helper Team
+                <span class="muted">
+                  ({{ role_slots.helper_team.applied }}/{{ role_slots.helper_team.required }})
+                </span>
+              </label>
+              {% if role_slots.helper_activities %}
+                <div id="helper-activity-group" class="active-activity-group{% if selected_application_role != 'helper_team' %} is-hidden{% endif %}">
+                  <label for="helper-activity-id" class="muted">Choose Organizer Help Section</label>
+                  <select
+                    id="helper-activity-id"
+                    name="helperActivityId"
+                    title="Choose Organizer Help Section"
+                    {% if selected_application_role != 'helper_team' %}disabled{% endif %}
+                  >
+                    {% for helper_activity in role_slots.helper_activities %}
+                      {% if helper_activity.id %}
+                        <option
+                          value="{{ helper_activity.id }}"
+                          {% if selected_helper_activity_id == helper_activity.id|stringformat:"s" %}selected{% endif %}
+                          {% if not helper_activity.available %}disabled{% endif %}
+                        >
+                          {{ helper_activity.name }} ({{ helper_activity.applied }}/{{ helper_activity.required }})
+                        </option>
+                      {% endif %}
+                    {% endfor %}
+                  </select>
+                  <p class="muted">Each organizer help section has separate slots. Select one to register.</p>
+                </div>
+              {% endif %}
+            {% endif %}
+          </div>
+        {% endif %}
+
+        <button type="submit" class="primary-btn">Continue to Payment</button>
+      </form>
+    </div>
+  </section>
+  {% if show_role_choice %}
+    <script>
+      (function () {
+        var roleRadios = document.querySelectorAll('input[name="applicationRole"]');
+        var activeGroup = document.getElementById("active-activity-group");
+        var activeSelect = document.getElementById("active-activity-id");
+        var helperGroup = document.getElementById("helper-activity-group");
+        var helperSelect = document.getElementById("helper-activity-id");
+        if (!roleRadios.length) return;
+
+        function syncRoleButtons() {
+          var selectedRole = null;
+          roleRadios.forEach(function (radio) {
+            if (radio.checked) selectedRole = radio.value;
+            var row = radio.closest(".radio-row");
+            if (!row) return;
+            row.classList.toggle("is-active", radio.checked);
+          });
+
+          if (activeGroup && activeSelect) {
+            var isActiveParticipant = selectedRole === "active_participant";
+            activeGroup.classList.toggle("is-hidden", !isActiveParticipant);
+            activeSelect.disabled = !isActiveParticipant;
+          }
+          if (helperGroup && helperSelect) {
+            var isHelperTeam = selectedRole === "helper_team";
+            helperGroup.classList.toggle("is-hidden", !isHelperTeam);
+            helperSelect.disabled = !isHelperTeam;
+          }
+        }
+
+        roleRadios.forEach(function (radio) {
+          radio.addEventListener("change", syncRoleButtons);
+        });
+        syncRoleButtons();
+      })();
+    </script>
+  {% endif %}
+{% endblock %}

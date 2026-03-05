@@ -1,0 +1,328 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}{% if edit_mode %}Edit Event{% else %}Create Event{% endif %} | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>{% if edit_mode %}Edit Event{% else %}Create Event{% endif %}
+      {% if edit_mode and event.is_private %}
+        <span class="badge-private">🔒 Private</span>
+      {% elif edit_mode and not event.is_private %}
+        <span class="badge-public">🌐 Public</span>
+      {% elif not edit_mode and event_type == 'private' %}
+        <span class="badge-private">🔒 Private</span>
+      {% elif not edit_mode and event_type == 'public' %}
+        <span class="badge-public">🌐 Public</span>
+      {% endif %}
+    </h1>
+    <p>{% if edit_mode %}Update event details from organizer dashboard.{% else %}Add new event details for organizer dashboard.{% endif %}</p>
+  </section>
+
+  <style>
+    .badge-private, .badge-public {
+      font-size: 14px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-weight: normal;
+      margin-left: 10px;
+    }
+    .badge-private {
+      background: #fef3e2;
+      color: #b86e00;
+    }
+    .badge-public {
+      background: transparent;
+      color: #2f8f4e;
+      padding: 0;
+      margin-left: 8px;
+      border-radius: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      vertical-align: middle;
+    }
+    .event-image-preview {
+      max-width: 260px;
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid #dfe5f3;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+  </style>
+
+  <section class="card">
+    <form
+      action="{% if edit_mode %}{% url 'edit_event' event.id %}{% else %}{% url 'new_event' %}{% endif %}"
+      method="post"
+      enctype="multipart/form-data"
+    >
+      {% csrf_token %}
+      <input type="hidden" name="is_private" value="{% if edit_mode %}{% if event.is_private %}true{% else %}false{% endif %}{% else %}{% if event_type == 'private' %}true{% else %}false{% endif %}{% endif %}" />
+      <div class="form-grid">
+        <div>
+          <label for="event-title">Event Title</label>
+          <input id="event-title" type="text" name="title" value="{{ event.title|default:'' }}" required />
+        </div>
+        <div>
+          <label for="event-category">Category</label>
+          <input id="event-category" type="text" name="category" value="{{ event.category|default:'' }}" required />
+        </div>
+        <div>
+          <label for="event-location">Location</label>
+          <input id="event-location" type="text" name="location" value="{{ event.location|default:'' }}" required />
+        </div>
+        <div>
+          <label for="event-date">Date</label>
+          <input id="event-date" type="date" name="date" value="{{ event.date|date:'Y-m-d' }}" required />
+        </div>
+        <div>
+          <label for="event-start-time">Time</label>
+          <div class="time-range-fields">
+            <label class="sr-only" for="event-start-time">Start Time</label>
+            <input
+              id="event-start-time"
+              type="time"
+              name="startTime"
+              value="{{ start_time_value|default:'' }}"
+              required
+            />
+            <span class="time-separator">to</span>
+            <label class="sr-only" for="event-end-time">End Time</label>
+            <input
+              id="event-end-time"
+              type="time"
+              name="endTime"
+              value="{{ end_time_value|default:'' }}"
+              required
+            />
+          </div>
+          <p class="muted">Select event start and end time.</p>
+        </div>
+        {% if event_type == 'private' or event.is_private %}
+          <input
+            type="hidden"
+            name="price"
+            value="{% if edit_mode %}{{ event.price|default:'0' }}{% else %}0{% endif %}"
+          />
+        {% else %}
+        <div>
+          <label for="event-price">Price</label>
+          <input id="event-price" type="number" name="price" min="0" value="{{ event.price|default:'' }}" required />
+        </div>
+        {% endif %}
+        <div class="full-width">
+          <label for="event-image-file">Upload Image (optional)</label>
+          <input id="event-image-file" type="file" name="imageFile" accept=".jpg,.jpeg,.png,.webp,image/*" />
+          <p class="muted">Direct image upload support (JPG, JPEG, PNG, WEBP, max 5MB).</p>
+          {% if edit_mode and event.image_source %}
+            <p class="muted">Current image preview:</p>
+            <img
+              src="{{ event.image_source }}"
+              alt="{{ event.title }}"
+              class="event-image-preview"
+            />
+          {% endif %}
+        </div>
+        <div class="full-width">
+          <label for="event-description">Description</label>
+          <textarea id="event-description" name="description" rows="6" required>{{ event.description|default:'' }}</textarea>
+        </div>
+
+        {% if event_type == 'private' or event.is_private %}
+          <input type="hidden" name="activeActivityId[]" value="" />
+          <input type="hidden" name="activeActivityName[]" value="" />
+          <input type="hidden" name="activeActivityRequired[]" value="0" />
+          <input type="hidden" name="helperActivityId[]" value="" />
+          <input type="hidden" name="helperActivityName[]" value="" />
+          <input type="hidden" name="helperActivityRequired[]" value="0" />
+        {% else %}
+        <div class="full-width requirement-box">
+          <h3>Activity Participant Requirement (Optional)</h3>
+          <p class="muted">Optional section. Leave empty if not needed. If multiple activities exist, add each one separately with its own required user count.</p>
+          <div id="active-activity-rows">
+            {% for row in active_activity_rows %}
+            <div class="requirement-grid activity-row">
+              <input type="hidden" name="activeActivityId[]" value="{{ row.id|default:'' }}" />
+              <div>
+                <label for="active-activity-name-{{ forloop.counter0 }}">Activity Name</label>
+                <input
+                  id="active-activity-name-{{ forloop.counter0 }}"
+                  type="text"
+                  name="activeActivityName[]"
+                  aria-label="Activity Name"
+                  title="Activity Name"
+                  maxlength="220"
+                  value="{{ row.name|default:'' }}"
+                  placeholder="Example: Stage Management"
+                />
+              </div>
+              <div>
+                <label for="active-activity-required-{{ forloop.counter0 }}">How many users are needed?</label>
+                <input
+                  id="active-activity-required-{{ forloop.counter0 }}"
+                  type="number"
+                  name="activeActivityRequired[]"
+                  aria-label="Activity Required Users"
+                  title="Activity Required Users"
+                  min="0"
+                  value="{{ row.required_count|default:'0' }}"
+                  placeholder="0"
+                />
+              </div>
+              <div class="full-width">
+                <button type="button" class="small-btn activity-remove-btn">Remove Activity</button>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          <div class="activity-add-wrap">
+            <button type="button" class="small-btn activity-add-btn" id="add-activity-row">Add Activity</button>
+          </div>
+        </div>
+        <script>
+          (function () {
+            var rowsWrap = document.getElementById("active-activity-rows");
+            var addBtn = document.getElementById("add-activity-row");
+            if (!rowsWrap || !addBtn) return;
+
+            function updateRemoveButtons() {
+              var rows = rowsWrap.querySelectorAll(".activity-row");
+              rows.forEach(function (row) {
+                var removeBtn = row.querySelector(".activity-remove-btn");
+                if (!removeBtn) return;
+                removeBtn.disabled = false;
+                removeBtn.classList.remove("is-hidden");
+              });
+            }
+
+            addBtn.addEventListener("click", function () {
+              var rowId = "active-activity-" + Date.now() + "-" + Math.floor(Math.random() * 10000);
+              var row = document.createElement("div");
+              row.className = "requirement-grid activity-row";
+              row.innerHTML =
+                '<input type="hidden" name="activeActivityId[]" value="" />' +
+                '<div><label for="' + rowId + '-name">Activity Name</label><input id="' + rowId + '-name" type="text" name="activeActivityName[]" aria-label="Activity Name" title="Activity Name" maxlength="220" placeholder="Example: Stage Management" /></div>' +
+                '<div><label for="' + rowId + '-required">How many users are needed?</label><input id="' + rowId + '-required" type="number" name="activeActivityRequired[]" aria-label="Activity Required Users" title="Activity Required Users" min="0" value="0" placeholder="0" /></div>' +
+                '<div class="full-width"><button type="button" class="small-btn activity-remove-btn">Remove Activity</button></div>';
+              rowsWrap.appendChild(row);
+              updateRemoveButtons();
+            });
+
+            rowsWrap.addEventListener("click", function (event) {
+              if (!event.target.classList.contains("activity-remove-btn")) return;
+              var row = event.target.closest(".activity-row");
+              if (!row) return;
+              row.remove();
+              updateRemoveButtons();
+            });
+
+            updateRemoveButtons();
+          })();
+        </script>
+
+        <div class="full-width requirement-box">
+          <h3>Organizer Help Requirement (Optional)</h3>
+          <p class="muted">Optional section. Leave empty if not needed. If multiple organizer help sections exist, add each one separately with its own required user count.</p>
+          <div id="helper-activity-rows">
+            {% for row in helper_activity_rows %}
+            <div class="requirement-grid activity-row helper-activity-row">
+              <input type="hidden" name="helperActivityId[]" value="{{ row.id|default:'' }}" />
+              <div>
+                <label for="helper-activity-name-{{ forloop.counter0 }}">Organizer Help Name</label>
+                <input
+                  id="helper-activity-name-{{ forloop.counter0 }}"
+                  type="text"
+                  name="helperActivityName[]"
+                  aria-label="Organizer Help Name"
+                  title="Organizer Help Name"
+                  maxlength="220"
+                  value="{{ row.name|default:'' }}"
+                  placeholder="Example: Registration Desk"
+                />
+              </div>
+              <div>
+                <label for="helper-activity-required-{{ forloop.counter0 }}">How many users are needed?</label>
+                <input
+                  id="helper-activity-required-{{ forloop.counter0 }}"
+                  type="number"
+                  name="helperActivityRequired[]"
+                  aria-label="Organizer Help Required Users"
+                  title="Organizer Help Required Users"
+                  min="0"
+                  value="{{ row.required_count|default:'0' }}"
+                  placeholder="0"
+                />
+              </div>
+              <div class="full-width">
+                <button type="button" class="small-btn helper-remove-btn">Remove Organizer Help</button>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          <div class="activity-add-wrap">
+            <button type="button" class="small-btn helper-add-btn" id="add-helper-row">Add Organizer Help</button>
+          </div>
+        </div>
+        <script>
+          (function () {
+            var rowsWrap = document.getElementById("helper-activity-rows");
+            var addBtn = document.getElementById("add-helper-row");
+            if (!rowsWrap || !addBtn) return;
+
+            function updateRemoveButtons() {
+              var rows = rowsWrap.querySelectorAll(".helper-activity-row");
+              rows.forEach(function (row) {
+                var removeBtn = row.querySelector(".helper-remove-btn");
+                if (!removeBtn) return;
+                removeBtn.disabled = false;
+                removeBtn.classList.remove("is-hidden");
+              });
+            }
+
+            addBtn.addEventListener("click", function () {
+              var rowId = "helper-activity-" + Date.now() + "-" + Math.floor(Math.random() * 10000);
+              var row = document.createElement("div");
+              row.className = "requirement-grid activity-row helper-activity-row";
+              row.innerHTML =
+                '<input type="hidden" name="helperActivityId[]" value="" />' +
+                '<div><label for="' + rowId + '-name">Organizer Help Name</label><input id="' + rowId + '-name" type="text" name="helperActivityName[]" aria-label="Organizer Help Name" title="Organizer Help Name" maxlength="220" placeholder="Example: Registration Desk" /></div>' +
+                '<div><label for="' + rowId + '-required">How many users are needed?</label><input id="' + rowId + '-required" type="number" name="helperActivityRequired[]" aria-label="Organizer Help Required Users" title="Organizer Help Required Users" min="0" value="0" placeholder="0" /></div>' +
+                '<div class="full-width"><button type="button" class="small-btn helper-remove-btn">Remove Organizer Help</button></div>';
+              rowsWrap.appendChild(row);
+              updateRemoveButtons();
+            });
+
+            rowsWrap.addEventListener("click", function (event) {
+              if (!event.target.classList.contains("helper-remove-btn")) return;
+              var row = event.target.closest(".helper-activity-row");
+              if (!row) return;
+              row.remove();
+              updateRemoveButtons();
+            });
+
+            updateRemoveButtons();
+          })();
+        </script>
+        {% endif %}
+
+        {% if event_type == 'private' or event.is_private %}
+        <div class="full-width">
+          <label for="event-guest-emails">Guest Emails <span class="required">*</span></label>
+          <textarea id="event-guest-emails" name="guest_emails" rows="4" placeholder="Enter email addresses of guests (one per line or comma separated)" {% if event_type == 'private' %}required{% endif %}>{{ event.guest_emails|default:'' }}</textarea>
+          <p class="muted">Enter all guest email addresses. After payment, invitation emails are sent automatically from the server email account.</p>
+        </div>
+        {% endif %}
+      </div>
+      <button type="submit" class="primary-btn">{% if edit_mode %}Update Event{% else %}Create Event{% endif %}</button>
+    </form>
+  </section>
+{% endblock %}

@@ -1,0 +1,8 @@
+node_modules/
+data/*.db
+npm-debug.log*
+db.sqlite3
+__pycache__/
+*.pyc
+staticfiles/
+media/

@@ -1,0 +1,85 @@
+{% extends "core/base_auth.html" %}
+{% block title %}Welcome | Eventify{% endblock %}
+{% block content %}
+  <div class="auth-page">
+    <div class="auth-overlay"></div>
+    <div class="auth-card">
+      <div class="auth-brand">
+        <h1>Eventify</h1>
+        <p>Event management system with booking, payment, notifications and support.</p>
+      </div>
+
+      {% if is_logged_in %}
+        <div class="flash flash-info">
+          You are already logged in.
+          <a href="{% url 'dashboard' %}" class="inline-link">Go to Dashboard</a>
+        </div>
+      {% endif %}
+
+      {% if messages %}
+        {% for message in messages %}
+          <div class="flash flash-{{ message.tags }}" data-auto-dismiss="true">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+
+      <div class="auth-tabs">
+        <a href="{% url 'auth_page' %}?tab=login" class="{% if active_tab == 'login' %}active{% endif %}">Login</a>
+        <a href="{% url 'auth_page' %}?tab=register" class="{% if active_tab == 'register' %}active{% endif %}">Register</a>
+      </div>
+
+      <div class="auth-panels">
+        <section class="auth-panel {% if active_tab == 'login' %}show{% endif %}">
+          <h2>Login</h2>
+          <form action="{% url 'login_submit' %}" method="post">
+            {% csrf_token %}
+            <label>Login as</label>
+            <select name="role" required>
+              <option value="user">User</option>
+              <option value="organizer">Organizer</option>
+            </select>
+
+            <label>Email or Phone</label>
+            <input name="contact" type="text" placeholder="john@example.com" required />
+
+            <label>Password</label>
+            <input name="password" type="password" placeholder="Enter password" required />
+
+            <button type="submit" class="primary-btn">Login</button>
+          </form>
+          <a href="{% url 'forgot_password' %}" class="inline-link">Forgot password?</a>
+        </section>
+
+        <section class="auth-panel {% if active_tab == 'register' %}show{% endif %}">
+          <h2>Create Account</h2>
+          <form action="{% url 'register_send_otp' %}" method="post">
+            {% csrf_token %}
+            <label>Register as</label>
+            <select name="role" required>
+              <option value="user">User</option>
+              <option value="organizer">Organizer</option>
+            </select>
+
+            <label>Full Name</label>
+            <input name="name" type="text" placeholder="John Doe" required />
+
+            <label>Email or Phone</label>
+            <input name="contact" type="text" placeholder="john@example.com" required />
+
+            <label>Password</label>
+            <input name="password" type="password" placeholder="Create password" required />
+
+            <label>Confirm Password</label>
+            <input name="confirmPassword" type="password" placeholder="Confirm password" required />
+
+            <button type="submit" class="primary-btn">Send OTP</button>
+          </form>
+        </section>
+      </div>
+
+      <div class="auth-demo">
+        <p><strong>Demo User:</strong> john@example.com / password123</p>
+        <p><strong>Demo Organizer:</strong> organizer@example.com / organizer123</p>
+      </div>
+    </div>
+  </div>
+{% endblock %}

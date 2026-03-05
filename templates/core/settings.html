@@ -1,0 +1,251 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Settings | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>Settings</h1>
+    <p>Security, notifications, preferences and support.</p>
+  </section>
+
+  <section class="split-grid">
+    <div class="card">
+      <h2>Security</h2>
+      <form action="{% url 'settings_password' %}" method="post">
+        {% csrf_token %}
+        <label for="oldPassword">Old Password</label>
+        <input id="oldPassword" name="oldPassword" type="password" autocomplete="current-password" required />
+
+        <label for="newPassword">New Password</label>
+        <input id="newPassword" name="newPassword" type="password" autocomplete="new-password" required />
+
+        <label for="confirmPassword">Confirm Password</label>
+        <input id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" required />
+
+        <button type="submit" class="primary-btn">Change Password</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Preferences</h2>
+      <form action="{% url 'settings_preferences' %}" method="post">
+        {% csrf_token %}
+        <label class="check-row">
+          <input type="checkbox" name="notificationBooking" value="1" {% if current_profile.notification_booking %}checked{% endif %} />
+          <span>Booking confirmations</span>
+        </label>
+        <label class="check-row">
+          <input type="checkbox" name="notificationPayment" value="1" {% if current_profile.notification_payment %}checked{% endif %} />
+          <span>Payment updates</span>
+        </label>
+        <label class="check-row">
+          <input type="checkbox" name="notificationUpdates" value="1" {% if current_profile.notification_updates %}checked{% endif %} />
+          <span>Organizer updates</span>
+        </label>
+        <label class="check-row">
+          <input type="checkbox" name="darkMode" value="1" {% if current_profile.dark_mode %}checked{% endif %} />
+          <span>Dark mode preference</span>
+        </label>
+
+        <button type="submit" class="primary-btn">Save Preferences</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Security Question</h2>
+    <p>Set a personal question. You will need this answer before deleting account.</p>
+    {% url 'settings' as settings_url %}
+    {% url 'settings_security_question' as settings_security_question_url %}
+    <form action="{{ settings_security_question_url|default:settings_url }}" method="post">
+      {% csrf_token %}
+      <label for="securityQuestion">Question</label>
+      <input
+        id="securityQuestion"
+        name="securityQuestion"
+        type="text"
+        maxlength="255"
+        placeholder="e.g. What is my childhood nickname?"
+        value="{{ current_profile.security_question }}"
+        required
+      />
+
+      <label for="securityAnswer">Answer</label>
+      <input
+        id="securityAnswer"
+        name="securityAnswer"
+        type="password"
+        autocomplete="off"
+        placeholder="Enter your answer"
+        required
+      />
+
+      <button type="submit" class="primary-btn">Save Security Question</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Account Security FAQ</h2>
+    <div class="faq-section">
+      <details class="faq-item">
+        <summary>How do I keep my account secure?</summary>
+        <div class="faq-answer">
+          <p>To keep your account secure:</p>
+          <ul>
+            <li>Use a strong, unique password with at least 8 characters</li>
+            <li>Never share your password with anyone</li>
+            <li>Change your password regularly</li>
+            <li>Log out after using public computers</li>
+            <li>Enable notification preferences to stay informed about account activity</li>
+          </ul>
+        </div>
+      </details>
+      
+      <details class="faq-item">
+        <summary>What if I forget my password?</summary>
+        <div class="faq-answer">
+          <p>You can reset your password by:</p>
+          <ol>
+            <li>Going to the login page</li>
+            <li>Clicking "Forgot Password"</li>
+            <li>Entering your email/phone and role</li>
+            <li>Verifying with OTP sent to your contact</li>
+            <li>Setting a new password</li>
+          </ol>
+        </div>
+      </details>
+      
+      <details class="faq-item">
+        <summary>Can I change my email or phone number?</summary>
+        <div class="faq-answer">
+          <p>Currently, your contact email/phone is linked to your account role. To update it, please contact our support team through the Support section.</p>
+        </div>
+      </details>
+      
+      <details class="faq-item">
+        <summary>How is my data protected?</summary>
+        <div class="faq-answer">
+          <p>We protect your data by:</p>
+          <ul>
+            <li>Encrypting passwords using industry-standard hashing</li>
+            <li>Using secure OTP verification for account actions</li>
+            <li>Storing personal data securely</li>
+            <li>Not sharing your information with third parties</li>
+          </ul>
+        </div>
+      </details>
+      
+      <details class="faq-item">
+        <summary>What happens when I delete my account?</summary>
+        <div class="faq-answer">
+          <p>When you delete your account:</p>
+          <ul>
+            <li>All your profile information is permanently removed</li>
+            <li>Your bookings and tickets are deleted</li>
+            <li>Your event history is removed</li>
+            <li>All support tickets are closed</li>
+            <li>This action cannot be undone</li>
+          </ul>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Support</h2>
+      <a href="{% url 'support' %}">View All Tickets</a>
+    </div>
+    <form action="{% url 'support' %}" method="post">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{% url 'settings' %}" />
+
+      <label>Subject</label>
+      <input type="text" name="subject" placeholder="Account or booking issue" required />
+
+      <label>Message</label>
+      <textarea name="message" rows="4" placeholder="Describe your issue..." required></textarea>
+
+      <button type="submit" class="primary-btn">Submit Support Request</button>
+    </form>
+  </section>
+
+  <section class="card danger-zone">
+    <h2>Danger Zone</h2>
+    <p>Once you delete your account, there is no going back. Please be certain.</p>
+    <a href="{% url 'delete_account' %}" class="danger-btn danger-link">Proceed to Secure Delete</a>
+  </section>
+
+  <style>
+    .faq-section {
+      margin-top: 16px;
+    }
+    .faq-item {
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .faq-item summary {
+      padding: 16px;
+      background: #f8f9fa;
+      cursor: pointer;
+      font-weight: 600;
+      color: #1f4fb9;
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .faq-item summary::-webkit-details-marker {
+      display: none;
+    }
+    .faq-item summary::after {
+      content: '+';
+      font-size: 20px;
+      font-weight: bold;
+    }
+    .faq-item[open] summary::after {
+      content: '-';
+    }
+    .faq-item summary:hover {
+      background: #eef2ff;
+    }
+    .faq-answer {
+      padding: 16px;
+      background: white;
+      border-top: 1px solid #e0e0e0;
+    }
+    .faq-answer ul, .faq-answer ol {
+      margin: 12px 0;
+      padding-left: 20px;
+    }
+    .faq-answer li {
+      margin-bottom: 8px;
+      color: #555;
+    }
+    .danger-zone {
+      border: 2px solid #ff6b6b;
+      background: #fff8f8;
+    }
+    .danger-zone h2 {
+      color: #d63031;
+    }
+    .danger-btn {
+      background-color: #d63031;
+      color: white;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    .danger-btn:hover {
+      background-color: #b71c1c;
+    }
+    .danger-link {
+      display: inline-block;
+      text-decoration: none;
+    }
+  </style>
+{% endblock %}

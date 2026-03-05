@@ -1,0 +1,1126 @@
+[
+{
+  "model": "auth.user",
+  "pk": 1,
+  "fields": {
+    "password": "pbkdf2_sha256$1200000$Csisqz1E512PBfEqL5GPHM$9PE4qWCAKGEDGon1xs7RJuyoBuUxO5o/gdfFOr2LRfY=",
+    "last_login": "2026-02-21T18:23:30.675Z",
+    "is_superuser": false,
+    "username": "john@example.com",
+    "first_name": "John Doe",
+    "last_name": "",
+    "email": "john@example.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-02-20T15:22:06.989Z",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "auth.user",
+  "pk": 2,
+  "fields": {
+    "password": "pbkdf2_sha256$1200000$sdJd8LUVcxyPeIly5aqKt7$aBq243UhsjwrTpYkQJEdiY5mxJ83kzKmbjlXBKNZY4I=",
+    "last_login": "2026-02-21T18:14:08.704Z",
+    "is_superuser": false,
+    "username": "organizer@example.com",
+    "first_name": "Sarah Weddings",
+    "last_name": "",
+    "email": "organizer@example.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-02-20T15:22:09.448Z",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "auth.user",
+  "pk": 3,
+  "fields": {
+    "password": "pbkdf2_sha256$1200000$ula7aESVfFPSghKoKL075X$otCdRo94qyuII8Tqqu11T7YPjomu/gCCA34jQQwVCrc=",
+    "last_login": "2026-02-20T15:25:10.981Z",
+    "is_superuser": false,
+    "username": "test87423@example.com",
+    "first_name": "Test User",
+    "last_name": "",
+    "email": "test87423@example.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-02-20T15:25:10.920Z",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "auth.user",
+  "pk": 4,
+  "fields": {
+    "password": "pbkdf2_sha256$1200000$Q58RDBKQaqmz6AVuHQtLVr$XYHWJ7KAfhCGquONBkRU/6Qf14FQSD50ayVbB0lCjrA=",
+    "last_login": "2026-02-21T13:15:08.778Z",
+    "is_superuser": false,
+    "username": "asing27748@gmail.com",
+    "first_name": "Arpit Singh",
+    "last_name": "",
+    "email": "asing27748@gmail.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-02-20T15:31:07.386Z",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "auth.user",
+  "pk": 5,
+  "fields": {
+    "password": "",
+    "last_login": null,
+    "is_superuser": false,
+    "username": "multi_test@example.com::user",
+    "first_name": "User",
+    "last_name": "",
+    "email": "",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-02-21T09:45:37.076Z",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "auth.user",
+  "pk": 8,
+  "fields": {
+    "password": "pbkdf2_sha256$1200000$k4IhOq5WSkHvpemfuVTFrE$2g9dJui/1okgElRcUb2Tht1RqxbEK8Idgvdte4vW/QQ=",
+    "last_login": "2026-02-21T11:28:00.826Z",
+    "is_superuser": false,
+    "username": "asing27748@gmail.com::organizer",
+    "first_name": "arpit singh",
+    "last_name": "",
+    "email": "asing27748@gmail.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-02-21T09:48:55.932Z",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "auth.user",
+  "pk": 9,
+  "fields": {
+    "password": "pbkdf2_sha256$1200000$wZFKDlgiOAxXb1FeIYBge7$UgLVTOQJ/CicPeazrZDNLYlLtzKvhk4Wnm/Rjh4q8j0=",
+    "last_login": "2026-02-21T17:22:35.963Z",
+    "is_superuser": false,
+    "username": "prahaldsingh12365415@gmail.com::user",
+    "first_name": "arpit",
+    "last_name": "",
+    "email": "prahaldsingh12365415@gmail.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-02-21T17:22:35.889Z",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "auth.user",
+  "pk": 10,
+  "fields": {
+    "password": "pbkdf2_sha256$1200000$udiNoOCwBWBAtw5r3RtDti$6BNASon83sxx7HscOzfkY52F6I7ihnbcUAYVG7vfAz4=",
+    "last_login": "2026-02-21T17:23:47.948Z",
+    "is_superuser": false,
+    "username": "prahaldsingh12365415@gmail.com::organizer",
+    "first_name": "arpit",
+    "last_name": "",
+    "email": "prahaldsingh12365415@gmail.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-02-21T17:23:45.407Z",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "auth.user",
+  "pk": 11,
+  "fields": {
+    "password": "pbkdf2_sha256$1200000$0BXyakwRXYb2zJfWCZ6faM$K12yt0p835hugBRLpmNbqrqjTdoNeK6HTZc2XnzdPGA=",
+    "last_login": "2026-02-21T17:25:27.211Z",
+    "is_superuser": false,
+    "username": "prahaladsingh12365415@gmail.com::organizer",
+    "first_name": "arpit",
+    "last_name": "",
+    "email": "prahaladsingh12365415@gmail.com",
+    "is_staff": false,
+    "is_active": true,
+    "date_joined": "2026-02-21T17:25:27.168Z",
+    "groups": [],
+    "user_permissions": []
+  }
+},
+{
+  "model": "core.profile",
+  "pk": 1,
+  "fields": {
+    "user": 1,
+    "role": "user",
+    "contact": "john@example.com",
+    "phone": "+91 9876543210",
+    "address": "123 Main Street, New Delhi, India",
+    "profile_image": "profile_images/133809813352734289.jpg",
+    "notification_booking": true,
+    "notification_payment": true,
+    "notification_updates": true,
+    "language": "English",
+    "dark_mode": true,
+    "created_at": "2026-02-20T15:22:09.439Z"
+  }
+},
+{
+  "model": "core.profile",
+  "pk": 2,
+  "fields": {
+    "user": 2,
+    "role": "organizer",
+    "contact": "organizer@example.com",
+    "phone": "+92 300 1224567",
+    "address": "Karachi, Pakistan",
+    "profile_image": "",
+    "notification_booking": true,
+    "notification_payment": true,
+    "notification_updates": true,
+    "language": "English",
+    "dark_mode": true,
+    "created_at": "2026-02-20T15:22:11.584Z"
+  }
+},
+{
+  "model": "core.profile",
+  "pk": 3,
+  "fields": {
+    "user": 3,
+    "role": "user",
+    "contact": "test87423@example.com",
+    "phone": "",
+    "address": "",
+    "profile_image": "",
+    "notification_booking": true,
+    "notification_payment": true,
+    "notification_updates": true,
+    "language": "English",
+    "dark_mode": false,
+    "created_at": "2026-02-20T15:25:10.928Z"
+  }
+},
+{
+  "model": "core.profile",
+  "pk": 4,
+  "fields": {
+    "user": 4,
+    "role": "user",
+    "contact": "asing27748@gmail.com",
+    "phone": "6386167317",
+    "address": "house no 117 hanumant vihar new bashti khanepur karrhi road kanpur nagar",
+    "profile_image": "profile_images/6274.jpg",
+    "notification_booking": true,
+    "notification_payment": true,
+    "notification_updates": true,
+    "language": "English",
+    "dark_mode": false,
+    "created_at": "2026-02-20T15:31:07.398Z"
+  }
+},
+{
+  "model": "core.profile",
+  "pk": 5,
+  "fields": {
+    "user": 5,
+    "role": "user",
+    "contact": "multi_test@example.com::user",
+    "phone": "",
+    "address": "",
+    "profile_image": "",
+    "notification_booking": true,
+    "notification_payment": true,
+    "notification_updates": true,
+    "language": "English",
+    "dark_mode": false,
+    "created_at": "2026-02-21T09:45:37.085Z"
+  }
+},
+{
+  "model": "core.profile",
+  "pk": 8,
+  "fields": {
+    "user": 8,
+    "role": "organizer",
+    "contact": "asing27748@gmail.com",
+    "phone": "",
+    "address": "",
+    "profile_image": "",
+    "notification_booking": true,
+    "notification_payment": true,
+    "notification_updates": true,
+    "language": "English",
+    "dark_mode": false,
+    "created_at": "2026-02-21T09:48:55.943Z"
+  }
+},
+{
+  "model": "core.profile",
+  "pk": 9,
+  "fields": {
+    "user": 9,
+    "role": "user",
+    "contact": "prahaldsingh12365415@gmail.com",
+    "phone": "",
+    "address": "",
+    "profile_image": "",
+    "notification_booking": true,
+    "notification_payment": true,
+    "notification_updates": true,
+    "language": "English",
+    "dark_mode": false,
+    "created_at": "2026-02-21T17:22:35.898Z"
+  }
+},
+{
+  "model": "core.profile",
+  "pk": 10,
+  "fields": {
+    "user": 10,
+    "role": "organizer",
+    "contact": "prahaldsingh12365415@gmail.com",
+    "phone": "",
+    "address": "",
+    "profile_image": "",
+    "notification_booking": true,
+    "notification_payment": true,
+    "notification_updates": true,
+    "language": "English",
+    "dark_mode": false,
+    "created_at": "2026-02-21T17:23:45.621Z"
+  }
+},
+{
+  "model": "core.profile",
+  "pk": 11,
+  "fields": {
+    "user": 11,
+    "role": "organizer",
+    "contact": "prahaladsingh12365415@gmail.com",
+    "phone": "",
+    "address": "",
+    "profile_image": "",
+    "notification_booking": true,
+    "notification_payment": true,
+    "notification_updates": true,
+    "language": "English",
+    "dark_mode": false,
+    "created_at": "2026-02-21T17:25:27.175Z"
+  }
+},
+{
+  "model": "core.otprequest",
+  "pk": 1,
+  "fields": {
+    "purpose": "reset",
+    "contact": "john@example.com",
+    "role": "",
+    "name": "",
+    "password_hash": "",
+    "user": 1,
+    "otp": "944887",
+    "expires_at": "2026-02-20T15:34:12.663Z",
+    "is_used": false,
+    "created_at": "2026-02-20T15:24:12.664Z"
+  }
+},
+{
+  "model": "core.otprequest",
+  "pk": 2,
+  "fields": {
+    "purpose": "register",
+    "contact": "test87423@example.com",
+    "role": "user",
+    "name": "Test User",
+    "password_hash": "pbkdf2_sha256$1200000$ula7aESVfFPSghKoKL075X$otCdRo94qyuII8Tqqu11T7YPjomu/gCCA34jQQwVCrc=",
+    "user": null,
+    "otp": "243966",
+    "expires_at": "2026-02-20T15:35:10.890Z",
+    "is_used": true,
+    "created_at": "2026-02-20T15:25:10.891Z"
+  }
+},
+{
+  "model": "core.otprequest",
+  "pk": 3,
+  "fields": {
+    "purpose": "register",
+    "contact": "asing27748@gmail.com",
+    "role": "user",
+    "name": "Arpit Singh",
+    "password_hash": "pbkdf2_sha256$1200000$87XV5oMd0lq8IAdBZaa1bY$yQgvdCnXLQI11mWAQ9jMtfId21lmxnIqj4MLHsQk5ss=",
+    "user": null,
+    "otp": "874795",
+    "expires_at": "2026-02-20T15:40:51.374Z",
+    "is_used": true,
+    "created_at": "2026-02-20T15:30:51.374Z"
+  }
+},
+{
+  "model": "core.otprequest",
+  "pk": 4,
+  "fields": {
+    "purpose": "register",
+    "contact": "asing27748@gmail.com",
+    "role": "organizer",
+    "name": "arpit singh",
+    "password_hash": "pbkdf2_sha256$1200000$k4IhOq5WSkHvpemfuVTFrE$2g9dJui/1okgElRcUb2Tht1RqxbEK8Idgvdte4vW/QQ=",
+    "user": null,
+    "otp": "542843",
+    "expires_at": "2026-02-21T09:58:32.671Z",
+    "is_used": true,
+    "created_at": "2026-02-21T09:48:32.671Z"
+  }
+},
+{
+  "model": "core.otprequest",
+  "pk": 5,
+  "fields": {
+    "purpose": "reset",
+    "contact": "asing27748@gmail.com",
+    "role": "user",
+    "name": "",
+    "password_hash": "",
+    "user": 4,
+    "otp": "570234",
+    "expires_at": "2026-02-21T10:30:50.987Z",
+    "is_used": true,
+    "created_at": "2026-02-21T10:20:50.988Z"
+  }
+},
+{
+  "model": "core.otprequest",
+  "pk": 6,
+  "fields": {
+    "purpose": "register",
+    "contact": "prahaldsingh12365415@gmail.com",
+    "role": "user",
+    "name": "arpit",
+    "password_hash": "pbkdf2_sha256$1200000$jHOfJNceHuKenPLOw13uDP$oNHeHUvPFTw1z8C7sGfLGqruPEK1lj515A79Mykfnc8=",
+    "user": null,
+    "otp": "968025",
+    "expires_at": "2026-02-21T17:32:16.529Z",
+    "is_used": false,
+    "created_at": "2026-02-21T17:22:16.530Z"
+  }
+},
+{
+  "model": "core.otprequest",
+  "pk": 7,
+  "fields": {
+    "purpose": "register",
+    "contact": "prahaldsingh12365415@gmail.com",
+    "role": "user",
+    "name": "arpit",
+    "password_hash": "pbkdf2_sha256$1200000$ChaSpmARvU7u4DnzlIMkB1$LtHFfTIeB0hexciaxbRVmB1umg7Qf9EB8US2xUqL91g=",
+    "user": null,
+    "otp": "750611",
+    "expires_at": "2026-02-21T17:32:18.762Z",
+    "is_used": false,
+    "created_at": "2026-02-21T17:22:18.763Z"
+  }
+},
+{
+  "model": "core.otprequest",
+  "pk": 8,
+  "fields": {
+    "purpose": "register",
+    "contact": "prahaldsingh12365415@gmail.com",
+    "role": "user",
+    "name": "arpit",
+    "password_hash": "pbkdf2_sha256$1200000$wZFKDlgiOAxXb1FeIYBge7$UgLVTOQJ/CicPeazrZDNLYlLtzKvhk4Wnm/Rjh4q8j0=",
+    "user": null,
+    "otp": "424928",
+    "expires_at": "2026-02-21T17:32:20.807Z",
+    "is_used": true,
+    "created_at": "2026-02-21T17:22:20.807Z"
+  }
+},
+{
+  "model": "core.otprequest",
+  "pk": 9,
+  "fields": {
+    "purpose": "register",
+    "contact": "prahaldsingh12365415@gmail.com",
+    "role": "organizer",
+    "name": "arpit",
+    "password_hash": "pbkdf2_sha256$1200000$udiNoOCwBWBAtw5r3RtDti$6BNASon83sxx7HscOzfkY52F6I7ihnbcUAYVG7vfAz4=",
+    "user": null,
+    "otp": "423893",
+    "expires_at": "2026-02-21T17:33:30.835Z",
+    "is_used": true,
+    "created_at": "2026-02-21T17:23:30.836Z"
+  }
+},
+{
+  "model": "core.otprequest",
+  "pk": 10,
+  "fields": {
+    "purpose": "register",
+    "contact": "prahaladsingh12365415@gmail.com",
+    "role": "organizer",
+    "name": "arpit",
+    "password_hash": "pbkdf2_sha256$1200000$0BXyakwRXYb2zJfWCZ6faM$K12yt0p835hugBRLpmNbqrqjTdoNeK6HTZc2XnzdPGA=",
+    "user": null,
+    "otp": "159255",
+    "expires_at": "2026-02-21T17:35:19.561Z",
+    "is_used": true,
+    "created_at": "2026-02-21T17:25:19.561Z"
+  }
+},
+{
+  "model": "core.event",
+  "pk": 1,
+  "fields": {
+    "title": "Electro Beats: Live Music Concert",
+    "category": "Music",
+    "location": "Karachi, Pakistan",
+    "date": "2026-03-17",
+    "time": "7:00 PM - 10:00 PM",
+    "price": 2500,
+    "description": "Live music event with top DJs and immersive stage lighting.",
+    "attendees_required": 0,
+    "attendees_usage": "",
+    "active_participants_required": 0,
+    "active_participants_usage": "",
+    "helpers_required": 0,
+    "helpers_usage": "",
+    "image_url": "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&w=1200&q=80",
+    "image_file": "",
+    "organizer_name": "Sarah Weddings",
+    "organizer_phone": "+92 300 1224567",
+    "organizer_email": "contact@sarahweddings.com",
+    "created_by": 2,
+    "created_at": "2026-02-20T15:22:11.620Z"
+  }
+},
+{
+  "model": "core.event",
+  "pk": 2,
+  "fields": {
+    "title": "Startup & Tech Conference 2026",
+    "category": "Business",
+    "location": "Karachi, Pakistan",
+    "date": "2026-03-27",
+    "time": "9:00 AM - 5:00 PM",
+    "price": 0,
+    "description": "Conference on AI, product design, and startup growth.",
+    "attendees_required": 0,
+    "attendees_usage": "",
+    "active_participants_required": 0,
+    "active_participants_usage": "",
+    "helpers_required": 0,
+    "helpers_usage": "",
+    "image_url": "https://images.unsplash.com/photo-1515169067868-5387ec356754?auto=format&fit=crop&w=1200&q=80",
+    "image_file": "",
+    "organizer_name": "Sarah Weddings",
+    "organizer_phone": "+92 300 1224567",
+    "organizer_email": "contact@sarahweddings.com",
+    "created_by": 2,
+    "created_at": "2026-02-20T15:22:11.620Z"
+  }
+},
+{
+  "model": "core.event",
+  "pk": 3,
+  "fields": {
+    "title": "Photography Workshop for Beginners",
+    "category": "Workshop",
+    "location": "Karachi, Pakistan",
+    "date": "2026-03-10",
+    "time": "1:00 PM - 5:00 PM",
+    "price": 1200,
+    "description": "Hands-on workshop on camera basics, framing, and lighting.",
+    "attendees_required": 0,
+    "attendees_usage": "",
+    "active_participants_required": 0,
+    "active_participants_usage": "",
+    "helpers_required": 0,
+    "helpers_usage": "",
+    "image_url": "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?auto=format&fit=crop&w=1200&q=80",
+    "image_file": "",
+    "organizer_name": "Sarah Weddings",
+    "organizer_phone": "+92 300 1224567",
+    "organizer_email": "contact@sarahweddings.com",
+    "created_by": 2,
+    "created_at": "2026-02-20T15:22:11.621Z"
+  }
+},
+{
+  "model": "core.event",
+  "pk": 4,
+  "fields": {
+    "title": "Culinary Masterclass with Chef Asad",
+    "category": "Workshop",
+    "location": "Karachi, Pakistan",
+    "date": "2026-03-22",
+    "time": "12:00 PM - 5:00 PM",
+    "price": 2000,
+    "description": "Interactive culinary event with plated tasting session.",
+    "attendees_required": 0,
+    "attendees_usage": "",
+    "active_participants_required": 0,
+    "active_participants_usage": "",
+    "helpers_required": 0,
+    "helpers_usage": "",
+    "image_url": "https://images.unsplash.com/photo-1556911220-bff31c812dba?auto=format&fit=crop&w=1200&q=80",
+    "image_file": "",
+    "organizer_name": "Sarah Weddings",
+    "organizer_phone": "+92 300 1224567",
+    "organizer_email": "contact@sarahweddings.com",
+    "created_by": 2,
+    "created_at": "2026-02-20T15:22:11.621Z"
+  }
+},
+{
+  "model": "core.event",
+  "pk": 5,
+  "fields": {
+    "title": "Wedding Event 2026",
+    "category": "Wedding",
+    "location": "Serena Hotel, Karachi, Pakistan",
+    "date": "2026-04-06",
+    "time": "10:00 AM - 4:00 PM",
+    "price": 5000,
+    "description": "Luxury wedding planning showcase for couples and families.",
+    "attendees_required": 0,
+    "attendees_usage": "",
+    "active_participants_required": 0,
+    "active_participants_usage": "",
+    "helpers_required": 0,
+    "helpers_usage": "",
+    "image_url": "https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1400&q=80",
+    "image_file": "",
+    "organizer_name": "Sarah Weddings",
+    "organizer_phone": "+92 300 1224567",
+    "organizer_email": "contact@sarahweddings.com",
+    "created_by": 2,
+    "created_at": "2026-02-20T15:22:11.622Z"
+  }
+},
+{
+  "model": "core.event",
+  "pk": 6,
+  "fields": {
+    "title": "Business Leadership Summit",
+    "category": "Business",
+    "location": "Convention Center, Bangalore",
+    "date": "2026-01-29",
+    "time": "10:00 AM - 6:00 PM",
+    "price": 5000,
+    "description": "Leadership talks and networking for business professionals.",
+    "attendees_required": 0,
+    "attendees_usage": "",
+    "active_participants_required": 0,
+    "active_participants_usage": "",
+    "helpers_required": 0,
+    "helpers_usage": "",
+    "image_url": "https://images.unsplash.com/photo-1475721027785-f74eccf877e2?auto=format&fit=crop&w=1200&q=80",
+    "image_file": "",
+    "organizer_name": "Sarah Weddings",
+    "organizer_phone": "+92 300 1224567",
+    "organizer_email": "contact@sarahweddings.com",
+    "created_by": 2,
+    "created_at": "2026-02-20T15:22:11.622Z"
+  }
+},
+{
+  "model": "core.event",
+  "pk": 7,
+  "fields": {
+    "title": "Art & Design Expo",
+    "category": "Art",
+    "location": "Gallery Hall, Mumbai",
+    "date": "2026-01-11",
+    "time": "11:00 AM - 8:00 PM",
+    "price": 3000,
+    "description": "Curated exhibition of modern art and design installations.",
+    "attendees_required": 0,
+    "attendees_usage": "",
+    "active_participants_required": 0,
+    "active_participants_usage": "",
+    "helpers_required": 0,
+    "helpers_usage": "",
+    "image_url": "https://images.unsplash.com/photo-1460661419201-fd4cecdf8a8b?auto=format&fit=crop&w=1200&q=80",
+    "image_file": "",
+    "organizer_name": "Sarah Weddings",
+    "organizer_phone": "+92 300 1224567",
+    "organizer_email": "contact@sarahweddings.com",
+    "created_by": 2,
+    "created_at": "2026-02-20T15:22:11.623Z"
+  }
+},
+{
+  "model": "core.event",
+  "pk": 8,
+  "fields": {
+    "title": "Food Festival Night",
+    "category": "Food & Drinks",
+    "location": "Carnival Ground, Kolkata",
+    "date": "2026-04-16",
+    "time": "6:00 PM - 11:00 PM",
+    "price": 2000,
+    "description": "Street food festival with live music and tasting counters.",
+    "attendees_required": 0,
+    "attendees_usage": "",
+    "active_participants_required": 0,
+    "active_participants_usage": "",
+    "helpers_required": 0,
+    "helpers_usage": "",
+    "image_url": "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=1200&q=80",
+    "image_file": "",
+    "organizer_name": "Sarah Weddings",
+    "organizer_phone": "+92 300 1224567",
+    "organizer_email": "contact@sarahweddings.com",
+    "created_by": 2,
+    "created_at": "2026-02-20T15:22:11.623Z"
+  }
+},
+{
+  "model": "core.event",
+  "pk": 9,
+  "fields": {
+    "title": "no",
+    "category": "mo",
+    "location": "mo",
+    "date": "2021-02-07",
+    "time": "10",
+    "price": 373,
+    "description": "kksdd",
+    "attendees_required": 0,
+    "attendees_usage": "",
+    "active_participants_required": 0,
+    "active_participants_usage": "",
+    "helpers_required": 0,
+    "helpers_usage": "",
+    "image_url": "",
+    "image_file": "event_images/20241220.jpg",
+    "organizer_name": "Sarah Weddings",
+    "organizer_phone": "+92 300 1224567",
+    "organizer_email": "organizer@example.com",
+    "created_by": 2,
+    "created_at": "2026-02-21T06:41:58.413Z"
+  }
+},
+{
+  "model": "core.event",
+  "pk": 10,
+  "fields": {
+    "title": "r",
+    "category": "mo",
+    "location": "mo",
+    "date": "8666-04-05",
+    "time": "2:22 AM - 3:24 AM",
+    "price": 768,
+    "description": "fhfgf",
+    "attendees_required": 0,
+    "attendees_usage": "",
+    "active_participants_required": 34,
+    "active_participants_usage": "hg",
+    "helpers_required": 65,
+    "helpers_usage": "y",
+    "image_url": null,
+    "image_file": "event_images/134141624537971824_sY6xJ0j.jpg",
+    "organizer_name": "Sarah Weddings",
+    "organizer_phone": "+92 300 1224567",
+    "organizer_email": "organizer@example.com",
+    "created_by": 2,
+    "created_at": "2026-02-21T17:53:16.913Z"
+  }
+},
+{
+  "model": "core.booking",
+  "pk": 2,
+  "fields": {
+    "user": 1,
+    "event": 2,
+    "tickets": 2,
+    "attendee_name": "John Doe",
+    "status": "pending",
+    "payment_status": "unpaid",
+    "application_role": "attendee",
+    "total_amount": 0,
+    "invoice_no": "",
+    "booking_date": "2026-02-20T15:22:11.635Z"
+  }
+},
+{
+  "model": "core.booking",
+  "pk": 3,
+  "fields": {
+    "user": 1,
+    "event": 6,
+    "tickets": 1,
+    "attendee_name": "John Doe",
+    "status": "completed",
+    "payment_status": "paid",
+    "application_role": "attendee",
+    "total_amount": 5000,
+    "invoice_no": "INV-2025012",
+    "booking_date": "2026-02-20T15:22:11.636Z"
+  }
+},
+{
+  "model": "core.booking",
+  "pk": 4,
+  "fields": {
+    "user": 1,
+    "event": 7,
+    "tickets": 1,
+    "attendee_name": "John Doe",
+    "status": "cancelled",
+    "payment_status": "refunded",
+    "application_role": "attendee",
+    "total_amount": 3000,
+    "invoice_no": "",
+    "booking_date": "2026-02-20T15:22:11.636Z"
+  }
+},
+{
+  "model": "core.booking",
+  "pk": 5,
+  "fields": {
+    "user": 1,
+    "event": 1,
+    "tickets": 1,
+    "attendee_name": "John Doe",
+    "status": "confirmed",
+    "payment_status": "paid",
+    "application_role": "attendee",
+    "total_amount": 2500,
+    "invoice_no": "INV-177160105591",
+    "booking_date": "2026-02-20T15:24:15.774Z"
+  }
+},
+{
+  "model": "core.booking",
+  "pk": 7,
+  "fields": {
+    "user": 4,
+    "event": 3,
+    "tickets": 1,
+    "attendee_name": "Arpit Singh",
+    "status": "cancelled",
+    "payment_status": "paid",
+    "application_role": "attendee",
+    "total_amount": 1200,
+    "invoice_no": "INV-177160376581",
+    "booking_date": "2026-02-20T16:09:21.064Z"
+  }
+},
+{
+  "model": "core.booking",
+  "pk": 8,
+  "fields": {
+    "user": 4,
+    "event": 7,
+    "tickets": 1,
+    "attendee_name": "Arpit Singh",
+    "status": "confirmed",
+    "payment_status": "paid",
+    "application_role": "attendee",
+    "total_amount": 3000,
+    "invoice_no": "INV-177166931517",
+    "booking_date": "2026-02-21T10:21:44.400Z"
+  }
+},
+{
+  "model": "core.payment",
+  "pk": 2,
+  "fields": {
+    "booking": 3,
+    "amount": 5000,
+    "method": "Card",
+    "status": "paid",
+    "paid_at": "2026-02-20T15:22:11.636Z"
+  }
+},
+{
+  "model": "core.payment",
+  "pk": 3,
+  "fields": {
+    "booking": 5,
+    "amount": 2500,
+    "method": "UPI",
+    "status": "paid",
+    "paid_at": "2026-02-20T15:24:15.834Z"
+  }
+},
+{
+  "model": "core.payment",
+  "pk": 5,
+  "fields": {
+    "booking": 7,
+    "amount": 1200,
+    "method": "UPI",
+    "status": "paid",
+    "paid_at": "2026-02-20T16:09:25.758Z"
+  }
+},
+{
+  "model": "core.payment",
+  "pk": 6,
+  "fields": {
+    "booking": 8,
+    "amount": 3000,
+    "method": "UPI",
+    "status": "paid",
+    "paid_at": "2026-02-21T10:21:55.348Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 1,
+  "fields": {
+    "user": 1,
+    "title": "Booking Confirmed",
+    "message": "Your booking for 'Electro Beats: Live Music Concert' has been confirmed.",
+    "type": "booking",
+    "is_read": false,
+    "created_at": "2026-02-20T15:22:11.638Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 2,
+  "fields": {
+    "user": 1,
+    "title": "Payment Updated",
+    "message": "Payment of INR 2,500 completed successfully.",
+    "type": "payment",
+    "is_read": false,
+    "created_at": "2026-02-20T15:22:11.638Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 3,
+  "fields": {
+    "user": 1,
+    "title": "Event Reminder",
+    "message": "Reminder: Photography Workshop starts soon.",
+    "type": "reminder",
+    "is_read": false,
+    "created_at": "2026-02-20T15:22:11.639Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 4,
+  "fields": {
+    "user": 1,
+    "title": "Booking Created",
+    "message": "Your booking request for 'Electro Beats: Live Music Concert' is created. Complete payment to confirm.",
+    "type": "booking",
+    "is_read": false,
+    "created_at": "2026-02-20T15:24:15.792Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 5,
+  "fields": {
+    "user": 1,
+    "title": "Booking Confirmed",
+    "message": "Payment successful for 'Electro Beats: Live Music Concert'. Booking is confirmed.",
+    "type": "payment",
+    "is_read": false,
+    "created_at": "2026-02-20T15:24:15.842Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 6,
+  "fields": {
+    "user": 3,
+    "title": "Welcome to Eventify",
+    "message": "Your account is verified and ready. Start browsing events.",
+    "type": "system",
+    "is_read": false,
+    "created_at": "2026-02-20T15:25:10.947Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 7,
+  "fields": {
+    "user": 4,
+    "title": "Welcome to Eventify",
+    "message": "Your account is verified and ready. Start browsing events.",
+    "type": "system",
+    "is_read": true,
+    "created_at": "2026-02-20T15:31:07.417Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 8,
+  "fields": {
+    "user": 4,
+    "title": "Booking Created",
+    "message": "Your booking request for 'Photography Workshop for Beginners' is created. Complete payment to confirm.",
+    "type": "booking",
+    "is_read": true,
+    "created_at": "2026-02-20T16:08:49.227Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 9,
+  "fields": {
+    "user": 4,
+    "title": "Booking Confirmed",
+    "message": "Payment successful for 'Photography Workshop for Beginners'. Booking is confirmed.",
+    "type": "payment",
+    "is_read": true,
+    "created_at": "2026-02-20T16:08:59.152Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 10,
+  "fields": {
+    "user": 4,
+    "title": "Booking Created",
+    "message": "Your booking request for 'Photography Workshop for Beginners' is created. Complete payment to confirm.",
+    "type": "booking",
+    "is_read": true,
+    "created_at": "2026-02-20T16:09:21.073Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 11,
+  "fields": {
+    "user": 4,
+    "title": "Booking Confirmed",
+    "message": "Payment successful for 'Photography Workshop for Beginners'. Booking is confirmed.",
+    "type": "payment",
+    "is_read": true,
+    "created_at": "2026-02-20T16:09:25.769Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 12,
+  "fields": {
+    "user": 4,
+    "title": "Booking Cancelled",
+    "message": "Your booking for 'Photography Workshop for Beginners' has been cancelled.",
+    "type": "booking",
+    "is_read": true,
+    "created_at": "2026-02-20T16:14:01.881Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 13,
+  "fields": {
+    "user": 8,
+    "title": "Welcome to Eventify",
+    "message": "Your account is verified and ready. Start browsing events.",
+    "type": "system",
+    "is_read": true,
+    "created_at": "2026-02-21T09:48:55.957Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 14,
+  "fields": {
+    "user": 4,
+    "title": "Password Updated",
+    "message": "Your account password was changed successfully.",
+    "type": "security",
+    "is_read": true,
+    "created_at": "2026-02-21T10:21:20.459Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 15,
+  "fields": {
+    "user": 4,
+    "title": "Booking Created",
+    "message": "Your booking request for 'Art & Design Expo' is created. Complete payment to confirm.",
+    "type": "booking",
+    "is_read": true,
+    "created_at": "2026-02-21T10:21:44.408Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 16,
+  "fields": {
+    "user": 4,
+    "title": "Booking Confirmed",
+    "message": "Payment successful for 'Art & Design Expo'. Booking is confirmed.",
+    "type": "payment",
+    "is_read": true,
+    "created_at": "2026-02-21T10:21:55.360Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 17,
+  "fields": {
+    "user": 9,
+    "title": "Welcome to Eventify",
+    "message": "Your account is verified and ready. Start browsing events.",
+    "type": "system",
+    "is_read": false,
+    "created_at": "2026-02-21T17:22:35.914Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 18,
+  "fields": {
+    "user": 10,
+    "title": "Welcome to Eventify",
+    "message": "Your account is verified and ready. Start browsing events.",
+    "type": "system",
+    "is_read": false,
+    "created_at": "2026-02-21T17:23:46.759Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 19,
+  "fields": {
+    "user": 11,
+    "title": "Welcome to Eventify",
+    "message": "Your account is verified and ready. Start browsing events.",
+    "type": "system",
+    "is_read": false,
+    "created_at": "2026-02-21T17:25:27.189Z"
+  }
+},
+{
+  "model": "core.notification",
+  "pk": 20,
+  "fields": {
+    "user": 1,
+    "title": "Booking Created",
+    "message": "Your booking request for 'Role Slot Test Event' is created. Complete payment to confirm.",
+    "type": "booking",
+    "is_read": false,
+    "created_at": "2026-02-21T18:10:20.283Z"
+  }
+}
+]

@@ -1,0 +1,40 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Payment | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>Payment Page</h1>
+    <p>Finish payment to confirm your booking.</p>
+  </section>
+
+  <section class="split-grid">
+    <div class="card">
+      <h2>Booking Summary</h2>
+      <p><strong>Event:</strong> {{ booking.event.title }}</p>
+      <p><strong>Date:</strong> {{ booking.event.date|date_human }} | {{ booking.event.time }}</p>
+      <p><strong>Location:</strong> {{ booking.event.location }}</p>
+      <p><strong>Tickets:</strong> {{ booking.tickets }}</p>
+      <p><strong>Total Amount:</strong> {{ booking.total_amount|money }}</p>
+    </div>
+
+    <div class="card">
+      <h2>Choose Payment Method</h2>
+      <form action="{% url 'payment_pay' booking.id %}" method="post">
+        {% csrf_token %}
+        <label class="radio-row">
+          <input type="radio" name="method" value="UPI" required />
+          <span>UPI</span>
+        </label>
+        <label class="radio-row">
+          <input type="radio" name="method" value="Card" required />
+          <span>Credit/Debit Card</span>
+        </label>
+        <label class="radio-row">
+          <input type="radio" name="method" value="Net Banking" required />
+          <span>Net Banking</span>
+        </label>
+        <button type="submit" class="primary-btn">Pay {{ booking.total_amount|money }}</button>
+      </form>
+    </div>
+  </section>
+{% endblock %}

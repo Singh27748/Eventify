@@ -1,0 +1,43 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Support | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>Support</h1>
+    <p>Submit support requests and track ticket status.</p>
+  </section>
+
+  <section class="split-grid">
+    <div class="card">
+      <h2>Create Ticket</h2>
+      <form action="{% url 'support' %}" method="post">
+        {% csrf_token %}
+        <label>Subject</label>
+        <input type="text" name="subject" placeholder="Payment issue" required />
+
+        <label>Message</label>
+        <textarea name="message" rows="5" placeholder="Explain your issue..." required></textarea>
+
+        <button type="submit" class="primary-btn">Submit Ticket</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>My Tickets</h2>
+      <div class="ticket-list">
+        {% for ticket in tickets %}
+          <article class="ticket-item">
+            <div>
+              <h3>{{ ticket.subject }}</h3>
+              <p>{{ ticket.message }}</p>
+              <span>{{ ticket.created_at|datetime_human }}</span>
+            </div>
+            <span class="badge {{ ticket.status|badge_class }}">{{ ticket.status }}</span>
+          </article>
+        {% empty %}
+          <p class="empty-text">No support tickets yet.</p>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+{% endblock %}

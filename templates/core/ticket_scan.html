@@ -1,0 +1,175 @@
+{% extends "core/base_auth.html" %}
+{% load core_tags %}
+{% block title %}Ticket Scan | Eventify{% endblock %}
+{% block content %}
+  <section class="simple-page">
+    <div class="card ticket-scan-card">
+      {% if not scan_valid %}
+        <h1 class="ticket-scan-invalid-title">Ticket Scan</h1>
+        <p class="muted">{{ error_text|default:"Ticket is invalid." }}</p>
+      {% else %}
+        <div class="card-head">
+          <h2>Ticket Scan Result</h2>
+          {% if show_full_info %}
+            <span class="badge badge-green">Organizer View</span>
+          {% else %}
+            <span class="badge badge-blue">Public View</span>
+          {% endif %}
+        </div>
+
+        {% if attendance_message %}
+          <div class="flash flash-info">{{ attendance_message }}</div>
+        {% endif %}
+        {% if public_feedback_message %}
+          <div class="flash flash-{{ public_feedback_tone }}">{{ public_feedback_message }}</div>
+        {% endif %}
+
+        <div class="ticket-scan-holder">
+          {% if holder_photo_url %}
+            <img
+              src="{{ holder_photo_url }}"
+              alt="{{ holder_name }}"
+              class="avatar big avatar-img"
+              width="78"
+              height="78"
+            />
+          {% else %}
+            <div class="avatar big">{{ holder_name|initials }}</div>
+          {% endif %}
+          <div>
+            <h3>{{ holder_name }}</h3>
+            {% if show_full_info %}
+              <p class="muted">{{ booking.user.username }}</p>
+            {% else %}
+              <p class="muted">Ticket Holder</p>
+            {% endif %}
+          </div>
+        </div>
+
+        {% if show_full_info %}
+          <div class="table-wrap ticket-scan-table-wrap">
+            <table class="ticket-scan-table">
+              <tbody>
+                <tr>
+                  <th>Ticket ID</th>
+                  <td>{{ booking.ticket_reference }}</td>
+                </tr>
+                <tr>
+                  <th>Booking ID</th>
+                  <td>#{{ booking.id }}</td>
+                </tr>
+                <tr>
+                  <th>Invoice No</th>
+                  <td>{{ booking.invoice_no|default:"-" }}</td>
+                </tr>
+                <tr>
+                  <th>Event</th>
+                  <td>{{ booking.event.title }}</td>
+                </tr>
+                <tr>
+                  <th>Date</th>
+                  <td>{{ booking.event.date|date_human }} | {{ booking.event.time }}</td>
+                </tr>
+                <tr>
+                  <th>Location</th>
+                  <td>{{ booking.event.location }}</td>
+                </tr>
+                <tr>
+                  <th>Tickets</th>
+                  <td>{{ booking.tickets }}</td>
+                </tr>
+                <tr>
+                  <th>Applied Role</th>
+                  <td>{{ booking.applied_role_label }}</td>
+                </tr>
+                <tr>
+                  <th>Amount</th>
+                  <td>{{ booking.total_amount|money }}</td>
+                </tr>
+                <tr>
+                  <th>Payment</th>
+                  <td>{{ booking.payment_status|title }}</td>
+                </tr>
+                <tr>
+                  <th>Payment Method</th>
+                  <td>{{ latest_payment.method|default:"-" }}</td>
+                </tr>
+                <tr>
+                  <th>Payment Time</th>
+                  <td>
+                    {% if latest_payment %}
+                      {{ latest_payment.paid_at|date:"d M Y, h:i A" }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                </tr>
+                <tr>
+                  <th>Payment Record</th>
+                  <td>{{ latest_payment.status|title|default:"-" }}</td>
+                </tr>
+                <tr>
+                  <th>Status</th>
+                  <td>{{ booking.status|title }}</td>
+                </tr>
+                <tr>
+                  <th>Phone</th>
+                  <td>{{ holder_profile.phone|default:"-" }}</td>
+                </tr>
+                <tr>
+                  <th>Email</th>
+                  <td>{{ booking.user.email|default:"-" }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="table-wrap ticket-scan-table-wrap">
+            <table class="ticket-scan-table">
+              <tbody>
+                <tr>
+                  <th>Event</th>
+                  <td>{{ booking.event.title }}</td>
+                </tr>
+                <tr>
+                  <th>User</th>
+                  <td>{{ holder_name }}</td>
+                </tr>
+                <tr>
+                  <th>Organizer</th>
+                  <td>{{ organizer_name }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <form
+            method="post"
+            enctype="multipart/form-data"
+            class="ticket-public-share-form"
+            data-no-transport-encryption="true"
+          >
+            {% csrf_token %}
+            <label for="ticket-public-media" class="muted">Upload Image / Video</label>
+            <input
+              id="ticket-public-media"
+              type="file"
+              name="public_media"
+              accept="image/*,video/*"
+              required
+            />
+            <label for="ticket-public-note" class="muted">Message (optional)</label>
+            <textarea
+              id="ticket-public-note"
+              name="public_note"
+              rows="3"
+              maxlength="1000"
+              placeholder="Write your message for organizer (optional)"
+            >{{ public_note_value }}</textarea>
+            <button type="submit" class="small-btn">Send</button>
+          </form>
+        {% endif %}
+      {% endif %}
+    </div>
+  </section>
+{% endblock %}

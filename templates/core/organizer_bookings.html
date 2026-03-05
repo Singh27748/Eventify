@@ -1,0 +1,44 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Organizer Bookings | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>Bookings</h1>
+    <p>Bookings received for your events.</p>
+  </section>
+
+  <section class="card">
+    <div class="table-wrap">
+      <table class="mobile-data-table">
+        <thead>
+          <tr>
+            <th>Ticket ID</th>
+            <th>Customer</th>
+            <th>Event</th>
+            <th>Date</th>
+            <th>Tickets</th>
+            <th>Applied Role</th>
+            <th>Status</th>
+            <th>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in bookings %}
+            <tr>
+              <td data-label="Ticket ID">{{ item.ticket_reference }}</td>
+              <td data-label="Customer">{{ item.user.first_name|default:item.user.username }}</td>
+              <td data-label="Event">{{ item.event.title }}</td>
+              <td data-label="Date">{{ item.event.date|date_human }}</td>
+              <td data-label="Tickets">{{ item.tickets }}</td>
+              <td data-label="Applied Role">{{ item.applied_role_label }}</td>
+              <td data-label="Status"><span class="badge {{ item.status|badge_class }}">{{ item.status }}</span></td>
+              <td data-label="Amount">{{ item.total_amount|money }}</td>
+            </tr>
+          {% empty %}
+            <tr class="empty-row"><td colspan="8" class="empty-cell">No bookings available yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

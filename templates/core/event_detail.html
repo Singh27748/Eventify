@@ -1,0 +1,210 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}{{ event.title }} | Eventify{% endblock %}
+{% block content %}
+  <style>
+    .badge-private, .badge-public {
+      font-size: 14px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-weight: normal;
+      margin-left: 10px;
+      vertical-align: middle;
+    }
+    .badge-private {
+      background: #fef3e2;
+      color: #b86e00;
+    }
+    .badge-public {
+      background: #e8f5e9;
+      color: #2e7d32;
+    }
+  </style>
+  <section class="event-hero card">
+    <div class="event-banner" style="background-image: url('{{ event.image_source|default:'' }}')">
+      <span class="category-chip dark">{{ event.category }}</span>
+      {% if event.is_private %}
+        <span class="badge-private">🔒 Private</span>
+      {% else %}
+        <span class="badge-public">🌐 Public</span>
+      {% endif %}
+      <h1>{{ event.title }}</h1>
+    </div>
+    <div class="event-hero-content">
+      <div>
+        <p><strong>Location:</strong> {{ event.location }}</p>
+        <p><strong>Date:</strong> {{ event.date|date_human }} | {{ event.time }}</p>
+        <p><strong>Organizer:</strong> {{ event.organizer_name }}</p>
+        <p><strong>Contact:</strong> {{ event.organizer_phone|default:'-' }}</p>
+      </div>
+      <aside class="booking-box">
+        <h2>{{ event.price|money }}</h2>
+        {% if current_profile.role == 'user' %}
+          {% if can_download_ticket and user_event_booking %}
+            {% if needs_profile_photo %}
+              <a href="{% url 'profile' %}" class="primary-btn block">Add Photo</a>
+            {% else %}
+              <a href="{% url 'download_ticket_pdf' user_event_booking.id %}" class="primary-btn block">Ticket PDF</a>
+            {% endif %}
+          {% elif can_continue_payment and user_event_booking %}
+            <a href="{% url 'payment_page' user_event_booking.id %}" class="primary-btn block">Complete Payment</a>
+          {% else %}
+            <a href="{% url 'book_event' event.id %}" class="primary-btn block">Book Now</a>
+          {% endif %}
+        {% else %}
+          <p class="muted">Organizer accounts cannot book events.</p>
+        {% endif %}
+      </aside>
+    </div>
+  </section>
+
+  <section class="split-grid">
+    <div class="card">
+      <h2>Overview</h2>
+      <p>{{ event.description }}</p>
+      {% if role_slots.show_role_choice %}
+        <div class="role-slot-box">
+          <p><strong>Role Applications</strong></p>
+          {% if role_slots.active_activities %}
+            {% for activity in role_slots.active_activities %}
+              <p class="muted">
+                Active Participant ({{ activity.name }}): {{ activity.applied }}/{{ activity.required }}
+              </p>
+            {% endfor %}
+          {% endif %}
+          {% if role_slots.helper_activities %}
+            {% for helper_activity in role_slots.helper_activities %}
+              <p class="muted">
+                Organizer Help ({{ helper_activity.name }}): {{ helper_activity.applied }}/{{ helper_activity.required }}
+              </p>
+            {% endfor %}
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {% if show_participants_panel %}
+        <div class="role-slot-box participant-slot-box">
+          <div class="card-head">
+            <h3>Participants</h3>
+            <div class="action-row">
+              <a href="{% url 'download_event_participants_excel' event.id %}?open=1" class="small-btn" target="_blank" rel="noopener">
+                Open File
+              </a>
+              <a href="{% url 'download_event_participants_excel' event.id %}" class="small-btn">
+                Download Excel
+              </a>
+            </div>
+          </div>
+          {% if event_participants %}
+            <div class="table-wrap participants-panel-wrap">
+              <table class="mobile-data-table participants-panel-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Ticket ID</th>
+                    <th>Payment</th>
+                    <th>Status</th>
+                    <th>Attendance</th>
+                    <th>Open</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for booking in event_participants %}
+                    <tr>
+                      <td data-label="Name">{{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}</td>
+                      <td data-label="Ticket ID">{{ booking.ticket_reference }}</td>
+                      <td data-label="Payment">{{ booking.payment_status|title }}</td>
+                      <td data-label="Status">{{ booking.status|title }}</td>
+                      <td data-label="Attendance">
+                        {% if booking.attendance_marked_at %}
+                          {{ booking.attendance_marked_at|date:"d M Y, h:i A" }}
+                        {% else %}
+                          -
+                        {% endif %}
+                      </td>
+                      <td data-label="Open">
+                        <a href="{{ booking.ticket_scan_url }}" class="small-btn">Open</a>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+
+            <div class="attendance-inline-section">
+              <div class="card-head">
+                <h4>Attendance List</h4>
+                <div class="action-row">
+                  <a href="{% url 'download_event_participants_excel' event.id %}?open=1&amp;section=attendance" class="small-btn" target="_blank" rel="noopener">
+                    Open File
+                  </a>
+                  <a href="{% url 'download_event_participants_excel' event.id %}?section=attendance" class="small-btn">
+                    Download Excel
+                  </a>
+                </div>
+              </div>
+              <div class="table-wrap participants-panel-wrap">
+                <table class="attendance-inline-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Ticket ID</th>
+                      <th>Attendance</th>
+                      <th>Attendance Time</th>
+                      <th>Open</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for booking in event_participants %}
+                      <tr>
+                        <td>{{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}</td>
+                        <td>{{ booking.ticket_reference }}</td>
+                        <td>
+                          {% if booking.attendance_marked_at %}
+                            Present
+                          {% else %}
+                            Pending
+                          {% endif %}
+                        </td>
+                        <td>
+                          {% if booking.attendance_marked_at %}
+                            {{ booking.attendance_marked_at|date:"d M Y, h:i A" }}
+                          {% else %}
+                            -
+                          {% endif %}
+                        </td>
+                        <td>
+                          <a href="{{ booking.ticket_scan_url }}" class="small-btn">Open</a>
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          {% else %}
+            <p class="empty-text">No participants yet.</p>
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Related Events</h2>
+        <a href="{% url 'browse_events' %}">Browse All</a>
+      </div>
+      <div class="event-list">
+        {% for item in related_events %}
+          <article class="event-item">
+            <h3>{{ item.title }}</h3>
+            <p>{{ item.date|date_human }} | {{ item.location }}</p>
+            <a href="{% url 'event_detail' item.id %}" class="small-btn">View</a>
+          </article>
+        {% empty %}
+          <p class="empty-text">No related events found.</p>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+{% endblock %}

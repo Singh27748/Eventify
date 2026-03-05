@@ -1,0 +1,58 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}My Bookings | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>My Bookings</h1>
+    <p>All active and upcoming bookings.</p>
+  </section>
+
+  <section class="card">
+    <div class="table-wrap">
+      <table class="mobile-bookings-table mobile-data-table">
+        <thead>
+          <tr>
+            <th>Event</th>
+            <th>Date</th>
+            <th>Tickets</th>
+            <th>Applied Role</th>
+            <th>Status</th>
+            <th>Amount</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for booking in bookings %}
+            <tr>
+              <td class="booking-event-cell" data-label="Event">
+                <span class="booking-event-title">{{ booking.event.title }}</span>
+                <span class="booking-ticket-id">Ticket ID: {{ booking.ticket_reference }}</span>
+              </td>
+              <td data-label="Date">{{ booking.event.date|date_human }}</td>
+              <td data-label="Tickets">{{ booking.tickets }}</td>
+              <td data-label="Applied Role">{{ booking.applied_role_label }}</td>
+              <td data-label="Status"><span class="badge {{ booking.status|badge_class }}">{{ booking.status }}</span></td>
+              <td data-label="Amount">{{ booking.total_amount|money }}</td>
+              <td data-label="Action">
+                <div class="action-row">
+                  <a href="{% url 'event_detail' booking.event.id %}" class="small-btn">View</a>
+                  {% if booking.payment_status != 'paid' %}
+                    <a href="{% url 'payment_page' booking.id %}" class="small-btn">Pay</a>
+                  {% endif %}
+                  {% if booking.status != 'cancelled' %}
+                    <form action="{% url 'cancel_booking' booking.id %}" method="post" class="inline-form">
+                      {% csrf_token %}
+                      <button type="submit" class="danger-btn" data-confirm="Cancel this booking?">Cancel</button>
+                    </form>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+          {% empty %}
+            <tr class="empty-row"><td colspan="7" class="empty-cell">No bookings found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

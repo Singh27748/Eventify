@@ -1,0 +1,41 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Private Event Payment | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>Private Event Payment</h1>
+    <p>Complete payment to send invitations to all private-event guests.</p>
+  </section>
+
+  <section class="split-grid">
+    <div class="card">
+      <h2>Payment Summary</h2>
+      <p><strong>Event:</strong> {{ private_payment.event.title }}</p>
+      <p><strong>Date:</strong> {{ private_payment.event.date|date_human }} | {{ private_payment.event.time }}</p>
+      <p><strong>Location:</strong> {{ private_payment.event.location }}</p>
+      <p><strong>Guest Emails:</strong> {{ private_payment.guest_count }}</p>
+      <p><strong>Rate:</strong> INR 10 per guest email</p>
+      <p><strong>Total Amount:</strong> {{ private_payment.amount|money }}</p>
+    </div>
+
+    <div class="card">
+      <h2>Choose Payment Method</h2>
+      <form action="{% url 'private_event_payment_pay' private_payment.id %}" method="post">
+        {% csrf_token %}
+        <label class="radio-row">
+          <input type="radio" name="method" value="UPI" required />
+          <span>UPI</span>
+        </label>
+        <label class="radio-row">
+          <input type="radio" name="method" value="Card" required />
+          <span>Credit/Debit Card</span>
+        </label>
+        <label class="radio-row">
+          <input type="radio" name="method" value="Net Banking" required />
+          <span>Net Banking</span>
+        </label>
+        <button type="submit" class="primary-btn">Pay {{ private_payment.amount|money }}</button>
+      </form>
+    </div>
+  </section>
+{% endblock %}

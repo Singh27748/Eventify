@@ -1,0 +1,42 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Notifications | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>Notifications</h1>
+    <p>Booking, security, payment and support updates.</p>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div class="chips">
+        <a href="{% url 'notifications' %}?filter=all" class="chip {% if filter_name == 'all' %}active{% endif %}">All</a>
+        <a href="{% url 'notifications' %}?filter=unread" class="chip {% if filter_name == 'unread' %}active{% endif %}">Unread</a>
+      </div>
+      <form action="{% url 'notifications_mark_all_read' %}" method="post">
+        {% csrf_token %}
+        <button type="submit" class="small-btn">Mark All as Read</button>
+      </form>
+    </div>
+
+    <div class="notification-list">
+      {% for item in notifications %}
+        <article class="notification-item {% if not item.is_read %}unread{% endif %}">
+          <div>
+            <h3>{{ item.title }}</h3>
+            <p>{{ item.message }}</p>
+            <span>{{ item.created_at|datetime_human }}</span>
+          </div>
+          {% if not item.is_read %}
+            <form action="{% url 'notification_mark_read' item.id %}" method="post">
+              {% csrf_token %}
+              <button type="submit" class="small-btn">Mark Read</button>
+            </form>
+          {% endif %}
+        </article>
+      {% empty %}
+        <p class="empty-text">No notifications available.</p>
+      {% endfor %}
+    </div>
+  </section>
+{% endblock %}

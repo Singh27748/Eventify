@@ -1,0 +1,174 @@
+﻿{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Delete Account | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>Delete Account</h1>
+    <p>Answer your security question, then verify OTP on email to permanently delete your account.</p>
+  </section>
+
+  <section class="card">
+    <div class="warning-box">
+      <h3>Warning: This action cannot be undone!</h3>
+      <p>Deleting your account will permanently remove:</p>
+      <ul>
+        <li>Your profile information</li>
+        <li>All your bookings and tickets</li>
+        <li>Your event history</li>
+        <li>All support tickets</li>
+        <li>All notifications</li>
+      </ul>
+    </div>
+
+    <form action="{% url 'delete_account' %}" method="post" class="delete-account-form">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="send_otp" />
+
+      <div class="form-group">
+        <label for="username_confirm">To confirm, enter your username:</label>
+        <input
+          id="username_confirm"
+          type="text"
+          name="username_confirm"
+          placeholder="{{ request.user.username }}"
+          required
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+
+      <div class="form-group">
+        <label>Security Question:</label>
+        <p class="security-question">{{ security_question }}</p>
+      </div>
+
+      <div class="form-group">
+        <label for="security_answer">Your Answer</label>
+        <input
+          id="security_answer"
+          type="password"
+          name="security_answer"
+          placeholder="Enter security answer"
+          autocomplete="off"
+          required
+        />
+      </div>
+
+      <div class="form-group">
+        <label class="check-row" for="confirm_delete_checkbox">
+          <input type="checkbox" name="confirm_delete" value="1" required id="confirm_delete_checkbox" />
+          <span>I understand that deleting my account is permanent and cannot be restored.</span>
+        </label>
+      </div>
+
+      <div class="form-actions">
+        <a href="{% url 'settings' %}" class="secondary-btn">Cancel</a>
+        <button type="submit" class="primary-btn">Send OTP for Account Delete</button>
+      </div>
+    </form>
+
+    {% if otp_pending %}
+      <hr />
+      <form action="{% url 'delete_account' %}" method="post" class="delete-account-form otp-verify-form">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="verify_otp" />
+
+        <div class="form-group">
+          <label for="otp">Enter OTP sent to {{ request.user.email }}</label>
+          <input
+            id="otp"
+            type="text"
+            name="otp"
+            inputmode="numeric"
+            pattern="[0-9]{6}"
+            maxlength="6"
+            placeholder="6-digit OTP"
+            required
+            autocomplete="one-time-code"
+          />
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="danger-btn">Verify OTP and Delete Account</button>
+        </div>
+      </form>
+    {% endif %}
+  </section>
+
+  <style>
+    .warning-box {
+      background-color: #fff3f3;
+      border: 2px solid #ff6b6b;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+    .warning-box h3 {
+      color: #d63031;
+      margin-top: 0;
+      margin-bottom: 12px;
+    }
+    .warning-box ul {
+      margin: 12px 0 0 20px;
+      color: #636e72;
+    }
+    .warning-box li {
+      margin-bottom: 6px;
+    }
+    .delete-account-form .form-group {
+      margin-bottom: 20px;
+    }
+    .delete-account-form input[type="text"],
+    .delete-account-form input[type="password"] {
+      width: 100%;
+      max-width: 460px;
+      padding: 12px;
+      border: 2px solid #ddd;
+      border-radius: 6px;
+      font-size: 16px;
+    }
+    .delete-account-form input[type="text"]:focus,
+    .delete-account-form input[type="password"]:focus {
+      border-color: #1f4fb9;
+      outline: none;
+    }
+    .security-question {
+      margin: 8px 0 0;
+      padding: 12px;
+      border-radius: 6px;
+      background: #f6f8ff;
+      border: 1px solid #d8e1ff;
+      color: #273f8f;
+      font-weight: 600;
+      max-width: 560px;
+    }
+    .check-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      cursor: pointer;
+    }
+    .check-row input {
+      margin-top: 4px;
+    }
+    .form-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 24px;
+      flex-wrap: wrap;
+    }
+    .danger-btn {
+      background-color: #d63031;
+      color: white;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    .danger-btn:hover {
+      background-color: #b71c1c;
+    }
+  </style>
+{% endblock %}

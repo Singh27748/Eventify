@@ -1,0 +1,28 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Booking Success | Eventify{% endblock %}
+{% block content %}
+  <section class="card success-card">
+    <h1>Booking Success</h1>
+    <p>Your booking is confirmed and payment is completed.</p>
+
+    <div class="success-grid">
+      <div>
+        <p><strong>Ticket ID:</strong> {{ booking.ticket_reference }}</p>
+        <p><strong>Booking ID:</strong> #{{ booking.id }}</p>
+        <p><strong>Invoice No:</strong> {{ booking.invoice_no|default:'-' }}</p>
+        <p><strong>Status:</strong> <span class="badge {{ booking.status|badge_class }}">{{ booking.status }}</span></p>
+      </div>
+      <div>
+        <p><strong>Event:</strong> {{ booking.event.title }}</p>
+        <p><strong>Date:</strong> {{ booking.event.date|date_human }} | {{ booking.event.time }}</p>
+        <p><strong>Total Paid:</strong> {{ booking.total_amount|money }}</p>
+      </div>
+    </div>
+
+    <div class="success-actions">
+      <a href="{% url 'my_bookings' %}" class="primary-btn">Go to My Bookings</a>
+      <a href="{% url 'invoices' %}" class="secondary-btn">View Invoices</a>
+    </div>
+  </section>
+{% endblock %}

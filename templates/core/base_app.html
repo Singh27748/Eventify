@@ -1,0 +1,145 @@
+﻿{% load static core_tags %}
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{% block title %}Eventify{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="{% static 'css/style.css' %}" />
+  </head>
+  <body{% if current_profile.dark_mode %} class="theme-dark"{% endif %}>
+    <div class="app-shell">
+      <header class="top-nav">
+        <button class="menu-toggle" type="button" data-toggle-sidebar aria-label="Toggle menu">
+          &#9776;
+        </button>
+
+        <a href="{% url 'dashboard' %}" class="brand">Eventify</a>
+
+        <a
+          href="{% url 'browse_events' %}"
+          class="top-link {% if active_page == 'browse-events' %}active{% endif %}"
+        >
+          <span>{{ ui_labels.browse_events }}</span>
+          <img
+            src="{% static 'img/search_data_10102577.png' %}"
+            alt=""
+            class="browse-link-icon"
+            width="16"
+            height="16"
+          />
+        </a>
+
+        <div class="top-actions">
+          <a
+            href="{% url 'browse_events' %}"
+            class="icon-button browse-mobile-link {% if active_page == 'browse-events' %}active{% endif %}"
+            aria-label="{{ ui_labels.browse_events_aria }}"
+          >
+            <img
+              src="{% static 'img/search_data_10102577.png' %}"
+              alt=""
+              class="browse-mobile-icon"
+              width="18"
+              height="18"
+            />
+          </a>
+
+          {% if current_profile.role == 'organizer' %}
+            <a
+              href="{% url 'dashboard' %}#ticket-scanner"
+              class="icon-button scan-mobile-link {% if active_page == 'dashboard' %}active{% endif %}"
+              aria-label="Open ticket chacker"
+              data-mobile-qr-launch
+              data-ticket-scan-template="{% url 'ticket_qr_scan' '__ticket_token__' %}"
+              data-ticket-scan-marker="__ticket_token__"
+              data-ticket-lookup-url="{% url 'ticket_lookup' %}"
+            >
+              <span class="scan-mobile-text">QR</span>
+            </a>
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              class="mobile-qr-capture-input"
+              data-mobile-qr-capture
+              aria-hidden="true"
+              tabindex="-1"
+            />
+          {% endif %}
+
+          <a href="{% url 'notifications' %}" class="icon-button" aria-label="{{ ui_labels.notifications_aria }}">
+            <img
+              src="{% static 'img/alarm_7467233.png' %}"
+              alt="Notifications"
+              class="alarm-icon"
+              width="18"
+              height="18"
+            />
+            {% if unread_notifications > 0 %}
+              <span class="notif-count">{{ unread_notifications }}</span>
+            {% endif %}
+          </a>
+
+          <details class="user-dropdown">
+            <summary>
+              {% if current_profile.profile_image %}
+                <img
+                  src="{{ current_profile.profile_image.url }}"
+                  alt="Profile"
+                  class="avatar avatar-img"
+                  width="34"
+                  height="34"
+                />
+              {% else %}
+                <span class="avatar">{{ request.user.first_name|default:request.user.username|initials }}</span>
+              {% endif %}
+              <span class="user-name">{{ request.user.first_name|default:request.user.username }}</span>
+              <span class="user-role">{{ current_profile.role }}</span>
+            </summary>
+            <div class="dropdown-card">
+              <a href="{% url 'profile' %}">{{ ui_labels.my_profile }}</a>
+              <a href="{% url 'settings' %}">{{ ui_labels.settings }}</a>
+              <form action="{% url 'logout_submit' %}" method="post">
+                {% csrf_token %}
+                <button type="submit">{{ ui_labels.logout }}</button>
+              </form>
+            </div>
+          </details>
+        </div>
+      </header>
+
+      <aside class="sidebar" id="sidebar">
+        <nav>
+          {% for item in menu_items %}
+            <a
+              href="{{ item.href }}"
+              class="nav-item {% if item.parent %}sub-item{% endif %} {% if active_page == item.key %}active{% endif %}"
+            >
+              {% if item.parent %}<span class="sub-prefix">-</span>{% endif %}
+              {{ item.label }}
+            </a>
+          {% endfor %}
+        </nav>
+      </aside>
+
+      <main class="content">
+        {% if messages %}
+          {% for message in messages %}
+            <div class="flash flash-{{ message.tags }}" data-auto-dismiss="true">{{ message }}</div>
+          {% endfor %}
+        {% endif %}
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+    <script src="{% static 'js/app.js' %}"></script>
+  </body>
+</html>
+
+

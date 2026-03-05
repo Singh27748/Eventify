@@ -1,0 +1,42 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Event History | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>Event History</h1>
+    <p>Past events and completed bookings.</p>
+  </section>
+
+  <section class="card">
+    <div class="table-wrap">
+      <table class="mobile-data-table">
+        <thead>
+          <tr>
+            <th>Event</th>
+            <th>Category</th>
+            <th>Date</th>
+            <th>Location</th>
+            <th>Organizer</th>
+            <th>Amount</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in events %}
+            <tr>
+              <td data-label="Event">{{ item.event.title }}</td>
+              <td data-label="Category"><span class="category-chip">{{ item.event.category }}</span></td>
+              <td data-label="Date">{{ item.event.date|date_human }}</td>
+              <td data-label="Location">{{ item.event.location }}</td>
+              <td data-label="Organizer">{{ item.event.organizer_name }}</td>
+              <td data-label="Amount">{{ item.total_amount|money }}</td>
+              <td data-label="Status"><span class="badge {{ item.status|badge_class }}">{{ item.status }}</span></td>
+            </tr>
+          {% empty %}
+            <tr class="empty-row"><td colspan="7" class="empty-cell">No past events found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

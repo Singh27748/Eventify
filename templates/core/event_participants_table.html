@@ -1,0 +1,132 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}
+  {% if inline_section == "attendance" %}
+    Attendance | {{ event.title }}
+  {% else %}
+    Participants | {{ event.title }}
+  {% endif %}
+{% endblock %}
+{% block content %}
+  <section class="page-head">
+    {% if inline_section == "attendance" %}
+      <h1>{{ event.title }} Attendance</h1>
+      <p>Attendance list in table format.</p>
+    {% else %}
+      <h1>{{ event.title }} Participants</h1>
+      <p>Participant list in table format.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    {% if show_participants_table %}
+      <div class="card-head">
+        <h2>Participants</h2>
+        <div class="action-row">
+          <a href="{% url 'download_event_participants_excel' event.id %}?open=1&amp;section=participants" class="small-btn">Open File</a>
+          <a href="{% url 'download_event_participants_excel' event.id %}" class="small-btn">Download Excel</a>
+        </div>
+      </div>
+      <div class="table-wrap participants-table-wrap">
+        <table class="mobile-data-table participants-panel-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Ticket ID</th>
+              <th>Email</th>
+              <th>Phone</th>
+              <th>Role</th>
+              <th>Tickets</th>
+              <th>Amount</th>
+              <th>Payment</th>
+              <th>Status</th>
+              <th>Booked At</th>
+              <th>Attendance Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for booking in participants %}
+              <tr>
+                <td data-label="Name">{{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}</td>
+                <td data-label="Ticket ID">{{ booking.ticket_reference }}</td>
+                <td data-label="Email">{{ booking.user.email|default:"-" }}</td>
+                <td data-label="Phone">{{ booking.user.profile.phone|default:"-" }}</td>
+                <td data-label="Role">{{ booking.applied_role_label }}</td>
+                <td data-label="Tickets">{{ booking.tickets }}</td>
+                <td data-label="Amount">{{ booking.total_amount|money }}</td>
+                <td data-label="Payment">{{ booking.payment_status|title }}</td>
+                <td data-label="Status">{{ booking.status|title }}</td>
+                <td data-label="Booked At">{{ booking.booking_date|date:"d M Y, h:i A" }}</td>
+                <td data-label="Attendance Time">
+                  {% if booking.attendance_marked_at %}
+                    {{ booking.attendance_marked_at|date:"d M Y, h:i A" }}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+              </tr>
+            {% empty %}
+              <tr class="empty-row">
+                <td colspan="11" class="empty-cell">No participants found.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+
+    {% if show_attendance_table %}
+      <div class="attendance-inline-section">
+        <div class="card-head">
+          <h3>Attendance List</h3>
+          <div class="action-row">
+            <a href="{% url 'download_event_participants_excel' event.id %}?open=1&amp;section=attendance" class="small-btn">Open File</a>
+            <a href="{% url 'download_event_participants_excel' event.id %}?section=attendance" class="small-btn">Download Excel</a>
+          </div>
+        </div>
+        <div class="table-wrap participants-table-wrap">
+          <table class="mobile-data-table participants-panel-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Ticket ID</th>
+                <th>Attendance</th>
+                <th>Attendance Time</th>
+                <th>Open</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for booking in participants %}
+                <tr>
+                  <td data-label="Name">{{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}</td>
+                  <td data-label="Ticket ID">{{ booking.ticket_reference }}</td>
+                  <td data-label="Attendance">
+                    {% if booking.attendance_marked_at %}
+                      Present
+                    {% else %}
+                      Pending
+                    {% endif %}
+                  </td>
+                  <td data-label="Attendance Time">
+                    {% if booking.attendance_marked_at %}
+                      {{ booking.attendance_marked_at|date:"d M Y, h:i A" }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                  <td data-label="Open">
+                    <a href="{{ booking.ticket_scan_url }}" class="small-btn">Open</a>
+                  </td>
+                </tr>
+              {% empty %}
+                <tr class="empty-row">
+                  <td colspan="5" class="empty-cell">No attendance records found.</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {% endif %}
+  </section>
+{% endblock %}

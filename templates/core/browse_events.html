@@ -1,0 +1,57 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Browse Events | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head wide">
+    <h1>{% if browse_mode == "organizer" %}My Created Events{% else %}Browse Events{% endif %}</h1>
+    <p>
+      {% if browse_mode == "organizer" %}
+        Search and filter only the events created by you.
+      {% else %}
+        Search with filters and open any event for details and booking.
+      {% endif %}
+    </p>
+  </section>
+
+  <section class="card">
+    <form action="{% url 'browse_events' %}" method="get" class="event-filter-form">
+      <input
+        type="text"
+        name="search"
+        value="{{ filters.search }}"
+        placeholder="Search event, category or location"
+      />
+      <select name="category">
+        <option value="">All Categories</option>
+        {% for item in categories %}
+          <option value="{{ item }}" {% if filters.category == item %}selected{% endif %}>{{ item }}</option>
+        {% endfor %}
+      </select>
+      <input type="text" name="location" value="{{ filters.location }}" placeholder="Location" />
+      <button type="submit" class="primary-btn">Search</button>
+    </form>
+  </section>
+
+  <section class="event-grid">
+    {% for event in events %}
+      <article class="event-card">
+        <div class="event-image" style="background-image: url('{% if event.image_source %}{{ event.image_source }}{% endif %}')"></div>
+        <div class="event-body">
+          <span class="category-chip">{{ event.category }}</span>
+          <h3>{{ event.title }}</h3>
+          <p>{{ event.location }}</p>
+          <p>{{ event.date|date_human }} | {{ event.time }}</p>
+          <div class="event-card-foot" style="display: flex; justify-content: space-between; align-items: center;">
+            <strong>{{ event.price|money }}</strong>
+            <a href="{% url 'event_detail' event.id %}" class="small-btn">View</a>
+          </div>
+        </div>
+      </article>
+    {% empty %}
+      <div class="card empty-state">
+        <h3>No events found</h3>
+        <p>Try changing filters or search keywords.</p>
+      </div>
+    {% endfor %}
+  </section>
+{% endblock %}

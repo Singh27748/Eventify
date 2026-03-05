@@ -1,0 +1,5 @@
+Django==6.0.2
+Pillow==11.3.0
+qrcode==8.2
+mysqlclient==2.2.8
+cryptography==44.0.2

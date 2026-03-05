@@ -1,0 +1,271 @@
+{% extends "core/base_auth.html" %}
+{% load static core_tags %}
+{% block title %}Home | Eventify{% endblock %}
+{% block extra_head %}
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css" />
+{% endblock %}
+{% block content %}
+  <div class="landing-page">
+    <header class="landing-header" id="home">
+      <div class="landing-header-inner">
+        <div class="landing-logo">Eventify</div>
+        <form class="landing-nav-search" action="{% url 'home' %}" method="get">
+          <input
+            type="text"
+            name="q"
+            value="{{ query }}"
+            placeholder="Search by name / location / Category"
+          />
+          {% if selected_category %}
+            <input type="hidden" name="category" value="{{ selected_category }}" />
+          {% endif %}
+          <button type="submit" class="primary-btn" aria-label="Search">
+            <img src="{% static 'img/search_data_10102577.png' %}" alt="" class="search-btn-icon" />
+          </button>
+        </form>
+        <nav class="landing-nav">
+          <a href="#home">Home</a>
+          <a href="{% url 'public_events' %}">Events</a>
+          <a href="#about">About</a>
+          <a href="#contact">Contact</a>
+        </nav>
+        <div class="landing-auth">
+          {% if is_logged_in %}
+            <a href="{% url 'dashboard' %}" class="primary-btn">Dashboard</a>
+          {% else %}
+            <a href="{% url 'auth_page' %}?tab=register" class="primary-btn">Register</a>
+            <a href="{% url 'auth_page' %}?tab=login" class="primary-btn">Login</a>
+          {% endif %}
+        </div>
+      </div>
+    </header>
+
+    <main class="landing-main">
+      {% if messages %}
+        {% for message in messages %}
+          <div class="flash flash-{{ message.tags }}" data-auto-dismiss="true">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+
+      <section class="landing-events" id="events">
+        <div class="section-head">
+          <h2>Featured Events</h2>
+        </div>
+        <div class="landing-card-grid">
+          {% for event in featured_events %}
+            <article class="landing-event-card">
+              <a href="{% url 'event_detail' event.id %}" class="landing-event-media" aria-label="{{ event.title }}">
+                {% if event.image_source %}
+                  <img src="{{ event.image_source }}" alt="{{ event.title }}" class="landing-event-image" loading="lazy" />
+                {% else %}
+                  <div class="landing-event-image landing-event-image-placeholder" aria-hidden="true"></div>
+                {% endif %}
+              </a>
+              <div class="landing-event-body">
+                <h3>{{ event.title }}</h3>
+                <p>{{ event.date|date_human }} | {{ event.location }}</p>
+                <p><strong>{{ event.price|money }}</strong></p>
+                <div class="landing-event-card-foot">
+                  <a href="{% url 'event_detail' event.id %}" class="small-btn" style="width: 100%;">Book Now</a>
+                </div>
+              </div>
+            </article>
+          {% empty %}
+            <div class="card empty-state">
+              <h3>No events found</h3>
+              <p>Try a different search or category.</p>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="landing-upcoming">
+        <div class="section-head">
+          <h2>Upcoming Events</h2>
+        </div>
+        {% if upcoming_events %}
+          <!-- Swiper carousel with center-focused cards -->
+          <div class="upcoming-swiper swiper" aria-label="Upcoming events carousel">
+            <div class="swiper-wrapper">
+              {% for event in upcoming_events %}
+                <article class="upcoming-item swiper-slide">
+                  <a
+                    href="{% url 'event_detail' event.id %}"
+                    class="upcoming-media"
+                    aria-label="{{ event.title }}"
+                  >
+                    {% if event.image_source %}
+                      <img src="{{ event.image_source }}" alt="{{ event.title }}" loading="lazy" />
+                    {% else %}
+                      <div class="upcoming-media-placeholder" aria-hidden="true"></div>
+                    {% endif %}
+                  </a>
+                  <div class="upcoming-body">
+                    <h3>{{ event.title }}</h3>
+                    <p class="upcoming-meta">{{ event.date|date_human }} | {{ event.location }}</p>
+                    <p class="upcoming-price">{{ event.price|money }}</p>
+                    <a href="{% url 'event_detail' event.id %}" class="upcoming-link">View Event</a>
+                  </div>
+                </article>
+              {% endfor %}
+            </div>
+          </div>
+        {% else %}
+          <p class="empty-text">No upcoming events right now.</p>
+        {% endif %}
+      </section>
+
+      <section class="landing-past-album">
+        <div class="section-head">
+          <h2>Past Event Photos</h2>
+        </div>
+        {% if past_events_album %}
+          <div class="past-album-grid">
+            {% for event in past_events_album %}
+              <a
+                href="#"
+                class="past-album-item"
+                aria-label="{{ event.title }}"
+                data-album-trigger="true"
+                data-album-image="{{ event.image_source }}"
+                data-album-title="{{ event.title }}"
+                data-album-category="{{ event.category }}"
+                data-album-date="{{ event.date|date_human }}"
+                data-album-time="{{ event.time }}"
+                data-album-location="{{ event.location }}"
+                data-album-organizer="{{ event.organizer_name }}"
+                data-album-contact="{{ event.organizer_phone|default:'-' }}"
+                data-album-price="{{ event.price|money }}"
+                data-album-description="{{ event.description }}"
+              >
+                <img src="{{ event.image_source }}" alt="{{ event.title }}" loading="lazy" />
+                <div class="past-album-overlay">
+                  <h3>{{ event.title }}</h3>
+                  <p>{{ event.date|date_human }} | {{ event.location }}</p>
+                </div>
+              </a>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="empty-text">No past event photos available yet.</p>
+        {% endif %}
+      </section>
+
+      <div class="album-viewer" data-album-modal hidden>
+        <button type="button" class="album-viewer-backdrop" data-album-close aria-label="Close photo details"></button>
+        <section class="album-viewer-card" role="dialog" aria-modal="true" aria-labelledby="albumViewerTitle">
+          <button type="button" class="album-viewer-close" data-album-close aria-label="Close">&times;</button>
+          <div class="album-viewer-media" data-album-media>
+            <div class="album-viewer-overlay">
+              <span class="album-viewer-tag" data-album-field="category"></span>
+              <h3 id="albumViewerTitle" data-album-field="title"></h3>
+              <p class="album-viewer-date-time">
+                <span data-album-field="date"></span> | <span data-album-field="time"></span>
+              </p>
+              <div class="album-viewer-details">
+                <p><strong>Location:</strong> <span data-album-field="location"></span></p>
+                <p><strong>Organizer:</strong> <span data-album-field="organizer"></span></p>
+                <p><strong>Contact:</strong> <span data-album-field="contact"></span></p>
+                <p><strong>Price:</strong> <span data-album-field="price"></span></p>
+                <p><strong>Description:</strong> <span data-album-field="description"></span></p>
+              </div>
+              <p class="album-viewer-note">Preview only. Booking is disabled in this photo view.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section class="landing-why" id="about">
+        <div class="section-head">
+          <h2>About Eventify</h2>
+        </div>
+        <div class="about-range" aria-hidden="true">
+          <span class="about-range-chip">Start</span>
+          <span class="about-range-chip">Finish</span>
+        </div>
+        <div class="why-grid about-grid">
+          <article class="why-item about-step">
+            <span class="about-step-no">Step 1</span>
+            <span class="why-kicker">Fast Flow</span>
+            <h3>Easy Booking</h3>
+            <p>Find your event, pick your seat, and confirm in a smooth 3-step flow.</p>
+          </article>
+          <article class="why-item about-step">
+            <span class="about-step-no">Step 2</span>
+            <span class="why-kicker">Protected</span>
+            <h3>Secure Payment</h3>
+            <p>Every transaction is protected with verified checkout and safe payment handling.</p>
+          </article>
+          <article class="why-item about-step">
+            <span class="about-step-no">Step 3</span>
+            <span class="why-kicker">Verified</span>
+            <h3>Trusted Vendors</h3>
+            <p>We partner with quality organizers so your tickets and event details stay reliable.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="landing-testimonials">
+        <div class="section-head">
+          <h2>Testimonials</h2>
+        </div>
+        <div class="testimonial-grid">
+          {% for item in testimonials %}
+            <article class="testimonial-card">
+              <p>"{{ item.text }}"</p>
+              <strong>{{ item.name }}</strong>
+            </article>
+          {% endfor %}
+        </div>
+      </section>
+
+
+    </main>
+
+    <footer class="landing-footer" id="contact">
+      <div class="landing-footer-inner contact-footer">
+        <div class="contact-head">
+          <h2>Contact Team</h2>
+          <p>Full system creater</p>
+        </div>
+        <div class="contact-team-grid">
+          <article class="contact-member-card">
+            <img src="{% static 'img/team/arpit-singh.svg' %}" alt="Arpit Singh" class="contact-member-photo" loading="lazy" />
+            <div class="contact-member-body">
+              <h3>Arpit Singh</h3>
+              <p class="contact-role">Full system creaters</p>
+              <p><strong>Roll No:</strong> 23071001138</p>
+              <p><strong>Phone:</strong> <a href="tel:+916386167317">6386167317</a></p>
+              <p><strong>Email:</strong> <a href="mailto:singhayush71637@gmail.com">singhayush71637@gmail.com</a></p>
+            </div>
+          </article>
+
+          <article class="contact-member-card">
+            <img src="{% static 'img/team/ayush-vishwakarma.svg' %}" alt="Ayush Vishwakarma" class="contact-member-photo" loading="lazy" />
+            <div class="contact-member-body">
+              <h3>Ayush Vishwakarma</h3>
+              <p class="contact-role">Database and Documentation Creator</p>
+              <p><strong>Roll No:</strong> 23071001153</p>
+              <p><strong>Phone:</strong> <a href="tel:+918960819513">8960819513</a></p>
+              <p><strong>Email:</strong> <a href="mailto:vishwakarmaayush3884@gmail.com">vishwakarmaayush3884@gmail.com</a></p>
+            </div>
+          </article>
+
+          <article class="contact-member-card">
+            <img src="{% static 'img/team/aryan-verma.svg' %}" alt="Aryan Verma" class="contact-member-photo" loading="lazy" />
+            <div class="contact-member-body">
+              <h3>Aryan Verma</h3>
+              <p class="contact-role">Representative</p>
+              <p><strong>Roll No:</strong> 23071001142</p>
+              <p><strong>Phone:</strong> <a href="tel:+916390435945">6390435945</a></p>
+              <p><strong>Email:</strong> <a href="mailto:2023bca136@axiscolleges.in">2023bca136@axiscolleges.in</a></p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </footer>
+  </div>
+{% endblock %}
+{% block extra_scripts %}
+  <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
+{% endblock %}

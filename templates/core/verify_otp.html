@@ -1,0 +1,37 @@
+{% extends "core/base_auth.html" %}
+{% block title %}Verify OTP | Eventify{% endblock %}
+{% block content %}
+  <div class="auth-page">
+    <div class="auth-overlay"></div>
+    <div class="auth-card small">
+      <h1>OTP Verification</h1>
+      <p>
+        Enter the 6-digit OTP sent to <strong>{{ otp_request.contact }}</strong>
+        for <strong>{{ otp_request.purpose }}</strong> flow.
+      </p>
+
+      {% if messages %}
+        {% for message in messages %}
+          <div class="flash flash-{{ message.tags }}" data-auto-dismiss="true">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+
+      <form action="{% url 'verify_otp' %}" method="post">
+        {% csrf_token %}
+        <input type="hidden" name="request_id" value="{{ otp_request.id }}" />
+        <label>OTP</label>
+        <input
+          name="otp"
+          type="text"
+          pattern="[0-9]{6}"
+          maxlength="6"
+          placeholder="Enter 6-digit OTP"
+          required
+        />
+        <button type="submit" class="primary-btn">Verify OTP</button>
+      </form>
+
+      <a href="{% url 'auth_page' %}" class="inline-link">Back to Login</a>
+    </div>
+  </div>
+{% endblock %}
