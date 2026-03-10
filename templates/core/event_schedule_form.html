@@ -1,0 +1,41 @@
+{% extends "core/base_app.html" %}
+{% block title %}{% if action == 'edit' %}Edit Schedule{% else %}Add Schedule{% endif %} | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>{% if action == 'edit' %}Edit Schedule{% else %}Add Schedule{% endif %}</h1>
+    <p>{{ event.title }}</p>
+  </section>
+
+  <section class="card">
+    <form method="post">
+      {% csrf_token %}
+      <label for="schedule-title">Title</label>
+      <input id="schedule-title" type="text" name="title" value="{{ schedule.title|default:'' }}" required />
+
+      <label for="schedule-description">Description</label>
+      <textarea id="schedule-description" name="description" rows="4">{{ schedule.description|default:'' }}</textarea>
+
+      <div class="form-grid">
+        <div>
+          <label for="schedule-start-time">Start Time</label>
+          <input id="schedule-start-time" type="time" name="start_time" value="{{ schedule.start_time|time:'H:i' }}" required />
+        </div>
+        <div>
+          <label for="schedule-end-time">End Time</label>
+          <input id="schedule-end-time" type="time" name="end_time" value="{{ schedule.end_time|time:'H:i' }}" required />
+        </div>
+      </div>
+
+      <label for="schedule-speaker">Speaker Name</label>
+      <input id="schedule-speaker" type="text" name="speaker_name" value="{{ schedule.speaker_name|default:'' }}" />
+
+      <label for="schedule-location">Location</label>
+      <input id="schedule-location" type="text" name="location" value="{{ schedule.location|default:'' }}" />
+
+      <div class="action-row">
+        <button type="submit" class="primary-btn">{% if action == 'edit' %}Update{% else %}Add{% endif %} Session</button>
+        <a href="{% url 'event_detail' event.id %}" class="small-btn">Back</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

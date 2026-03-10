@@ -39,6 +39,16 @@
       </div>
       <aside class="booking-box">
         <h2>{{ event.price|money }}</h2>
+        {% if bookable_ticket_types %}
+          <div class="role-slot-box">
+            <p><strong>Ticket Types</strong></p>
+            {% for item in bookable_ticket_types %}
+              <p class="muted">
+                {{ item.name }} - {{ item.price|money }} | Left {{ item.available_quantity }}
+              </p>
+            {% endfor %}
+          </div>
+        {% endif %}
         {% if current_profile.role == 'user' %}
           {% if can_download_ticket and user_event_booking %}
             {% if needs_profile_photo %}
@@ -102,6 +112,7 @@
                   <tr>
                     <th>Name</th>
                     <th>Ticket ID</th>
+                    <th>Ticket Type</th>
                     <th>Payment</th>
                     <th>Status</th>
                     <th>Attendance</th>
@@ -113,6 +124,7 @@
                     <tr>
                       <td data-label="Name">{{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}</td>
                       <td data-label="Ticket ID">{{ booking.ticket_reference }}</td>
+                      <td data-label="Ticket Type">{{ booking.ticket_type.name|default:'Standard' }}</td>
                       <td data-label="Payment">{{ booking.payment_status|title }}</td>
                       <td data-label="Status">{{ booking.status|title }}</td>
                       <td data-label="Attendance">
@@ -123,7 +135,18 @@
                         {% endif %}
                       </td>
                       <td data-label="Open">
-                        <a href="{{ booking.ticket_scan_url }}" class="small-btn">Open</a>
+                        {% if booking.ticket_scan_url %}
+                          <a
+                            href="{{ booking.ticket_scan_url }}"
+                            class="small-btn"
+                            title="Open ticket for {{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}"
+                            aria-label="Open ticket for {{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}"
+                          >
+                            {{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}
+                          </a>
+                        {% else %}
+                          -
+                        {% endif %}
                       </td>
                     </tr>
                   {% endfor %}
@@ -131,57 +154,6 @@
               </table>
             </div>
 
-            <div class="attendance-inline-section">
-              <div class="card-head">
-                <h4>Attendance List</h4>
-                <div class="action-row">
-                  <a href="{% url 'download_event_participants_excel' event.id %}?open=1&amp;section=attendance" class="small-btn" target="_blank" rel="noopener">
-                    Open File
-                  </a>
-                  <a href="{% url 'download_event_participants_excel' event.id %}?section=attendance" class="small-btn">
-                    Download Excel
-                  </a>
-                </div>
-              </div>
-              <div class="table-wrap participants-panel-wrap">
-                <table class="attendance-inline-table">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Ticket ID</th>
-                      <th>Attendance</th>
-                      <th>Attendance Time</th>
-                      <th>Open</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {% for booking in event_participants %}
-                      <tr>
-                        <td>{{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}</td>
-                        <td>{{ booking.ticket_reference }}</td>
-                        <td>
-                          {% if booking.attendance_marked_at %}
-                            Present
-                          {% else %}
-                            Pending
-                          {% endif %}
-                        </td>
-                        <td>
-                          {% if booking.attendance_marked_at %}
-                            {{ booking.attendance_marked_at|date:"d M Y, h:i A" }}
-                          {% else %}
-                            -
-                          {% endif %}
-                        </td>
-                        <td>
-                          <a href="{{ booking.ticket_scan_url }}" class="small-btn">Open</a>
-                        </td>
-                      </tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
-              </div>
-            </div>
           {% else %}
             <p class="empty-text">No participants yet.</p>
           {% endif %}
@@ -205,6 +177,87 @@
           <p class="empty-text">No related events found.</p>
         {% endfor %}
       </div>
+    </div>
+  </section>
+
+  <section class="split-grid">
+    <div class="card">
+      <div class="card-head">
+        <h2>Event Schedule</h2>
+        {% if is_event_owner %}
+          <a href="{% url 'event_schedule_add' event.id %}" class="small-btn">Add Session</a>
+        {% endif %}
+      </div>
+      {% if event_schedules %}
+        <div class="table-wrap">
+          <table class="mobile-data-table">
+            <thead>
+              <tr>
+                <th>Session</th>
+                <th>Time</th>
+                <th>Speaker</th>
+                <th>Location</th>
+                {% if is_event_owner %}<th>Action</th>{% endif %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in event_schedules %}
+                <tr>
+                  <td data-label="Session">
+                    <strong>{{ item.title }}</strong>
+                    {% if item.description %}<p class="muted">{{ item.description }}</p>{% endif %}
+                  </td>
+                  <td data-label="Time">{{ item.start_time|time:"H:i" }} - {{ item.end_time|time:"H:i" }}</td>
+                  <td data-label="Speaker">{{ item.speaker_name|default:'-' }}</td>
+                  <td data-label="Location">{{ item.location|default:'-' }}</td>
+                  {% if is_event_owner %}
+                    <td data-label="Action">
+                      <div class="action-row">
+                        <a href="{% url 'event_schedule_edit' item.id %}" class="small-btn">Edit</a>
+                        <form action="{% url 'event_schedule_delete' item.id %}" method="post" class="inline-form">
+                          {% csrf_token %}
+                          <button type="submit" class="danger-btn" data-confirm="Delete this schedule item?">Delete</button>
+                        </form>
+                      </div>
+                    </td>
+                  {% endif %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="empty-text">No schedule added yet.</p>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Event Gallery</h2>
+        {% if is_event_owner %}
+          <a href="{% url 'event_gallery_add' event.id %}" class="small-btn">Upload Images</a>
+        {% endif %}
+      </div>
+      {% if event_gallery_images %}
+        <div class="past-album-grid">
+          {% for image in event_gallery_images %}
+            <article class="past-album-item" style="height: 220px;">
+              <img src="{{ image.image_url }}" alt="{{ image.caption|default:event.title }}" loading="lazy" />
+              <div class="past-album-overlay">
+                <p>{{ image.caption|default:'Event Gallery Image' }}</p>
+                {% if is_event_owner %}
+                  <form action="{% url 'event_gallery_delete' image.id %}" method="post" class="inline-form">
+                    {% csrf_token %}
+                    <button type="submit" class="danger-btn" data-confirm="Delete this gallery image?">Delete</button>
+                  </form>
+                {% endif %}
+              </div>
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="empty-text">No gallery images yet.</p>
+      {% endif %}
     </div>
   </section>
 {% endblock %}

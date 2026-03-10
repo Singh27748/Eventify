@@ -79,6 +79,38 @@
         </div>
       </section>
 
+      <section class="landing-events">
+        <div class="section-head">
+          <h2>Trending Events</h2>
+        </div>
+        <div class="landing-card-grid">
+          {% for event in trending_events %}
+            <article class="landing-event-card">
+              <a href="{% url 'event_detail' event.id %}" class="landing-event-media" aria-label="{{ event.title }}">
+                {% if event.image_source %}
+                  <img src="{{ event.image_source }}" alt="{{ event.title }}" class="landing-event-image" loading="lazy" />
+                {% else %}
+                  <div class="landing-event-image landing-event-image-placeholder" aria-hidden="true"></div>
+                {% endif %}
+              </a>
+              <div class="landing-event-body">
+                <h3>{{ event.title }}</h3>
+                <p>{{ event.date|date_human }} | {{ event.location }}</p>
+                <p><strong>{{ event.price|money }}</strong></p>
+                <div class="landing-event-card-foot">
+                  <a href="{% url 'event_detail' event.id %}" class="small-btn" style="width: 100%;">View</a>
+                </div>
+              </div>
+            </article>
+          {% empty %}
+            <div class="card empty-state">
+              <h3>No trending events available</h3>
+              <p>Trending list updates from recent paid bookings.</p>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+
       <section class="landing-upcoming">
         <div class="section-head">
           <h2>Upcoming Events</h2>
@@ -216,6 +248,33 @@
               <strong>{{ item.name }}</strong>
             </article>
           {% endfor %}
+        </div>
+      </section>
+
+      <section class="landing-connect-section" aria-labelledby="newUserConnectTitle">
+        <div class="section-head">
+          <h2 id="newUserConnectTitle">Connect with Eventify</h2>
+        </div>
+        <div class="landing-connect-card">
+          <div class="landing-connect-panel">
+            <form action="{% url 'newsletter_subscribe' %}" method="post" class="landing-connect-form">
+              {% csrf_token %}
+              <input
+                type="email"
+                name="email"
+                placeholder="Enter your email"
+                value="{{ home_contact_email }}"
+                required
+              />
+              <textarea
+                name="question"
+                rows="3"
+                placeholder="Write your question here"
+                required
+              ></textarea>
+              <button type="submit" class="primary-btn">Send</button>
+            </form>
+          </div>
         </div>
       </section>
 

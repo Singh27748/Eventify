@@ -14,6 +14,7 @@
           <tr>
             <th>Event</th>
             <th>Date</th>
+            <th>Ticket Type</th>
             <th>Tickets</th>
             <th>Applied Role</th>
             <th>Status</th>
@@ -29,6 +30,7 @@
                 <span class="booking-ticket-id">Ticket ID: {{ booking.ticket_reference }}</span>
               </td>
               <td data-label="Date">{{ booking.event.date|date_human }}</td>
+              <td data-label="Ticket Type">{{ booking.ticket_type.name|default:'Standard' }}</td>
               <td data-label="Tickets">{{ booking.tickets }}</td>
               <td data-label="Applied Role">{{ booking.applied_role_label }}</td>
               <td data-label="Status"><span class="badge {{ booking.status|badge_class }}">{{ booking.status }}</span></td>
@@ -39,17 +41,25 @@
                   {% if booking.payment_status != 'paid' %}
                     <a href="{% url 'payment_page' booking.id %}" class="small-btn">Pay</a>
                   {% endif %}
+                  {% if booking.payment_status == 'paid' %}
+                    <a href="{% url 'download_ticket_pdf' booking.id %}" class="small-btn">Ticket</a>
+                  {% endif %}
+                  {% if booking.payment_status == 'paid' or booking.payment_status == 'refunded' %}
+                    <a href="{% url 'download_invoice' booking.id %}" class="small-btn">Invoice</a>
+                  {% endif %}
                   {% if booking.status != 'cancelled' %}
                     <form action="{% url 'cancel_booking' booking.id %}" method="post" class="inline-form">
                       {% csrf_token %}
-                      <button type="submit" class="danger-btn" data-confirm="Cancel this booking?">Cancel</button>
+                      <button type="submit" class="danger-btn" data-confirm="Cancel this booking?">
+                        {% if booking.payment_status == 'paid' %}Cancel & Refund{% else %}Cancel{% endif %}
+                      </button>
                     </form>
                   {% endif %}
                 </div>
               </td>
             </tr>
           {% empty %}
-            <tr class="empty-row"><td colspan="7" class="empty-cell">No bookings found.</td></tr>
+            <tr class="empty-row"><td colspan="8" class="empty-cell">No bookings found.</td></tr>
           {% endfor %}
         </tbody>
       </table>

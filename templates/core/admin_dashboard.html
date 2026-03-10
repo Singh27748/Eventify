@@ -1,0 +1,187 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Admin Dashboard | Eventify{% endblock %}
+{% block content %}
+  <div class="admin-page">
+    <section class="admin-hero card">
+      <div class="admin-hero-copy">
+        <span class="admin-kicker">Platform Control</span>
+        <h1>Admin Dashboard</h1>
+        <p>Platform level monitoring for users, events, bookings, payments, and support activity.</p>
+      </div>
+      <div class="admin-hero-pulse">
+        <div class="admin-hero-chip">
+          <span>Live Users</span>
+          <strong>{{ stats.total_users }}</strong>
+        </div>
+        <div class="admin-hero-chip">
+          <span>Revenue</span>
+          <strong>{{ stats.total_payments|money }}</strong>
+        </div>
+        <div class="admin-hero-chip">
+          <span>Open Tickets</span>
+          <strong>{{ stats.open_tickets }}</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="stat-grid admin-stat-grid">
+      <article class="stat-card blue admin-stat-card">
+        <span class="admin-stat-kicker">Accounts</span>
+        <h3>Total Users</h3>
+        <strong>{{ stats.total_users }}</strong>
+        <p>All registered platform profiles.</p>
+      </article>
+      <article class="stat-card purple admin-stat-card">
+        <span class="admin-stat-kicker">Catalog</span>
+        <h3>Total Events</h3>
+        <strong>{{ stats.total_events }}</strong>
+        <p>Public and private listings combined.</p>
+      </article>
+      <article class="stat-card green admin-stat-card">
+        <span class="admin-stat-kicker">Sales</span>
+        <h3>Total Bookings</h3>
+        <strong>{{ stats.total_bookings }}</strong>
+        <p>Confirmed, pending, and refunded records.</p>
+      </article>
+      <article class="stat-card orange admin-stat-card">
+        <span class="admin-stat-kicker">Cashflow</span>
+        <h3>Paid Revenue</h3>
+        <strong>{{ stats.total_payments|money }}</strong>
+        <p>Verified paid transactions across the platform.</p>
+      </article>
+    </section>
+
+    <section class="admin-link-grid">
+      <a href="{% url 'admin_events' %}" class="admin-link-card">
+        <span class="admin-link-eyebrow">Catalog</span>
+        <h2>Review Events</h2>
+        <p>Inspect public and private event listings.</p>
+      </a>
+      <a href="{% url 'admin_users' %}" class="admin-link-card">
+        <span class="admin-link-eyebrow">Accounts</span>
+        <h2>Manage Users</h2>
+        <p>Track roles, email verification, and 2FA adoption.</p>
+      </a>
+      <a href="{% url 'admin_bookings' %}" class="admin-link-card">
+        <span class="admin-link-eyebrow">Bookings</span>
+        <h2>Audit Tickets</h2>
+        <p>Monitor attendee transactions and booking health.</p>
+      </a>
+      <a href="{% url 'admin_support' %}" class="admin-link-card">
+        <span class="admin-link-eyebrow">Support</span>
+        <h2>Resolve Tickets</h2>
+        <p>Handle pending support requests quickly.</p>
+      </a>
+    </section>
+
+    <section class="split-grid admin-dashboard-grid">
+      <div class="card admin-table-card">
+        <div class="card-head">
+          <div>
+            <span class="admin-table-kicker">Latest Activity</span>
+            <h2>Recent Bookings</h2>
+          </div>
+          <a href="{% url 'admin_bookings' %}">View All</a>
+        </div>
+        <div class="table-wrap">
+          <table class="mobile-data-table">
+            <thead>
+              <tr>
+                <th>Ticket</th>
+                <th>User</th>
+                <th>Event</th>
+                <th>Status</th>
+                <th>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in recent_bookings %}
+                <tr>
+                  <td data-label="Ticket">{{ item.ticket_reference }}</td>
+                  <td data-label="User">{{ item.user.first_name|default:item.user.username }}</td>
+                  <td data-label="Event">{{ item.event.title }}</td>
+                  <td data-label="Status"><span class="badge {{ item.status|badge_class }}">{{ item.status }}</span></td>
+                  <td data-label="Amount">{{ item.total_amount|money }}</td>
+                </tr>
+              {% empty %}
+                <tr class="empty-row"><td colspan="5" class="empty-cell">No bookings yet.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card admin-table-card">
+        <div class="card-head">
+          <div>
+            <span class="admin-table-kicker">New Signups</span>
+            <h2>Recent Users</h2>
+          </div>
+          <a href="{% url 'admin_users' %}">View All</a>
+        </div>
+        <div class="table-wrap">
+          <table class="mobile-data-table">
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Role</th>
+                <th>Contact</th>
+                <th>Joined</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in recent_users %}
+                <tr>
+                  <td data-label="User">{{ item.user.first_name|default:item.user.username }}</td>
+                  <td data-label="Role">{{ item.role|title }}</td>
+                  <td data-label="Contact">{{ item.contact }}</td>
+                  <td data-label="Joined">{{ item.created_at|datetime_human }}</td>
+                </tr>
+              {% empty %}
+                <tr class="empty-row"><td colspan="4" class="empty-cell">No users found.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="card admin-table-card">
+      <div class="card-head">
+        <div>
+          <span class="admin-table-kicker">Security Trail</span>
+          <h2>Recent Security Activity</h2>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="mobile-data-table admin-data-table admin-audit-table">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Action</th>
+              <th>Status</th>
+              <th>Actor</th>
+              <th>IP</th>
+              <th>Summary</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in recent_security_events %}
+              <tr>
+                <td data-label="When">{{ item.created_at|datetime_human }}</td>
+                <td data-label="Action">{{ item.action|title }}</td>
+                <td data-label="Status"><span class="badge {{ item.status|badge_class }}">{{ item.status }}</span></td>
+                <td data-label="Actor">{{ item.actor_contact|default:"-" }}</td>
+                <td data-label="IP">{{ item.ip_address|default:"-" }}</td>
+                <td data-label="Summary">{{ item.summary }}</td>
+              </tr>
+            {% empty %}
+              <tr class="empty-row"><td colspan="6" class="empty-cell">No security activity logged yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+{% endblock %}

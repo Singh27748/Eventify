@@ -1,0 +1,24 @@
+{% extends "core/base_app.html" %}
+{% block title %}Verify Email | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>Email Verification</h1>
+    <p>Confirm your account email for secure booking alerts.</p>
+  </section>
+
+  <section class="card">
+    <p><strong>Email:</strong> {{ account_email|default:'Not set' }}</p>
+    {% if is_email_verified %}
+      <p class="muted">Your email is already verified.</p>
+    {% else %}
+      <p class="muted">Click below to receive a verification link.</p>
+      <form method="post">
+        {% csrf_token %}
+        <button type="submit" class="primary-btn">Send Verification Link</button>
+      </form>
+    {% endif %}
+    <div class="action-row" style="margin-top: 12px;">
+      <a href="{% url 'settings' %}" class="small-btn">Back to Settings</a>
+    </div>
+  </section>
+{% endblock %}

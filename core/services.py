@@ -1,3 +1,8 @@
+"""
+Eventify Services - Helper functions aur business logic yahan define hote hain.
+Isme notifications create karna, menu items, labels, OTP generate karna, etc. shamil hai.
+"""
+
 import random
 from datetime import timedelta
 
@@ -6,9 +11,10 @@ from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 
-from .models import Booking, Event, Notification, OTPRequest, Payment, Profile
+from .models import Booking, Event, Notification, OTPRequest, Payment, Profile, PromoCode
 
 
+# Supported languages - Eventify Hindi, Urdu aur English support karta hai
 SUPPORTED_LANGUAGES = ("English", "Hindi", "Urdu")
 
 
@@ -58,6 +64,7 @@ def ui_labels(language):
         "bookings": "Bookings",
         "my_bookings": "My Bookings",
         "event_history": "Event History",
+        "payment_history": "Payment History",
         "invoice": "Invoice",
         "my_profile": "My Profile",
         "settings": "Settings",
@@ -81,7 +88,7 @@ def status_class(status):
         return "badge-green"
     if value in ("pending", "unpaid", "open", "in_progress"):
         return "badge-orange"
-    if value in ("cancelled", "refunded"):
+    if value in ("cancelled", "refunded", "failed"):
         return "badge-red"
     return "badge-blue"
 
@@ -106,11 +113,23 @@ def create_notification(user, title, message, ntype="system"):
 
 def menu_by_role(role, language="English"):
     labels = ui_labels(language)
+    labels.setdefault("payment_history", "Payment History")
+    if role == Profile.ROLE_ADMIN:
+        return [
+            {"key": "dashboard", "label": labels["dashboard"], "href": "/dashboard/"},
+            {"key": "admin-events", "label": "All Events", "href": "/platform-admin/events/"},
+            {"key": "admin-users", "label": "All Users", "href": "/platform-admin/users/"},
+            {"key": "admin-tickets", "label": "All Bookings", "href": "/platform-admin/bookings/"},
+            {"key": "admin-payments", "label": "All Payments", "href": "/platform-admin/payments/"},
+            {"key": "admin-support", "label": "Support Tickets", "href": "/platform-admin/support/"},
+            {"key": "profile", "label": labels["my_profile"], "href": "/profile/"},
+        ]
     if role == Profile.ROLE_ORGANIZER:
         return [
             {"key": "dashboard", "label": labels["dashboard"], "href": "/dashboard/"},
             {"key": "my-events", "label": labels["my_events"], "href": "/my-events/"},
             {"key": "organizer-bookings", "label": labels["bookings"], "href": "/organizer-bookings/"},
+            {"key": "payment-history", "label": labels["payment_history"], "href": "/payment-history/"},
             {"key": "invoices", "label": labels["invoice"], "href": "/invoices/"},
             {"key": "profile", "label": labels["my_profile"], "href": "/profile/"},
         ]
@@ -118,6 +137,7 @@ def menu_by_role(role, language="English"):
         {"key": "dashboard", "label": labels["dashboard"], "href": "/dashboard/"},
         {"key": "my-bookings", "label": labels["my_bookings"], "href": "/my-bookings/"},
         {"key": "event-history", "label": labels["event_history"], "href": "/event-history/"},
+        {"key": "payment-history", "label": labels["payment_history"], "href": "/payment-history/"},
         {"key": "invoices", "label": labels["invoice"], "href": "/invoices/"},
         {"key": "profile", "label": labels["my_profile"], "href": "/profile/"},
     ]
@@ -180,6 +200,35 @@ def seed_demo_data():
                 "contact": organizer.username,
                 "phone": "+92 300 1224567",
                 "address": "Karachi, Pakistan",
+            },
+        )
+
+    admin_user = User.objects.filter(username="admin@example.com").first()
+    if not admin_user:
+        admin_user = User.objects.create_user(
+            username="admin@example.com",
+            password="admin123",
+            first_name="Platform Admin",
+            last_name="",
+            email="admin@example.com",
+        )
+        Profile.objects.update_or_create(
+            user=admin_user,
+            defaults={
+                "role": Profile.ROLE_ADMIN,
+                "contact": "admin@example.com",
+                "phone": "+91 9000000000",
+                "address": "Platform Operations",
+                "email_verified": True,
+            },
+        )
+    else:
+        Profile.objects.update_or_create(
+            user=admin_user,
+            defaults={
+                "role": Profile.ROLE_ADMIN,
+                "contact": admin_user.username,
+                "email_verified": True,
             },
         )
 
@@ -327,6 +376,27 @@ def seed_demo_data():
                 total_amount=e4.price,
             )
 
+    promo_defaults = [
+        {
+            "code": "WELCOME10",
+            "description": "10% off on your first booking",
+            "discount_type": PromoCode.DISCOUNT_PERCENTAGE,
+            "discount_value": 10,
+            "active": True,
+            "expires_at": timezone.now() + timedelta(days=120),
+        },
+        {
+            "code": "FLAT200",
+            "description": "Flat INR 200 off",
+            "discount_type": PromoCode.DISCOUNT_FIXED,
+            "discount_value": 200,
+            "active": True,
+            "expires_at": timezone.now() + timedelta(days=45),
+        },
+    ]
+    for promo in promo_defaults:
+        PromoCode.objects.update_or_create(code=promo["code"], defaults=promo)
+
     if Notification.objects.filter(user=user).count() == 0:
         create_notification(
             user,
@@ -355,3 +425,37 @@ def seed_demo_data():
         )["total"]
         or 0,
     }
+
+
+def get_trending_events(limit=6):
+    """
+    Get trending events based on booking count and recent activity.
+    Events with most bookings in the last 30 days are considered trending.
+    """
+    from django.db.models import Count
+    from datetime import timedelta
+    
+    thirty_days_ago = timezone.now() - timedelta(days=30)
+    
+    # Get events with most bookings in last 30 days
+    trending = (
+        Event.objects.filter(
+            is_private=False,
+            bookings__booking_date__gte=thirty_days_ago,
+            bookings__payment_status=Booking.PAYMENT_PAID
+        )
+        .annotate(booking_count=Count('bookings'))
+        .filter(booking_count__gt=0)
+        .order_by('-booking_count', '-date')[:limit]
+    )
+    
+    # If not enough trending events, fill with upcoming events
+    if trending.count() < limit:
+        existing_ids = [e.id for e in trending]
+        upcoming = Event.objects.filter(
+            is_private=False,
+            date__gte=timezone.localdate()
+        ).exclude(id__in=existing_ids).order_by('date')[:limit - trending.count()]
+        trending = list(trending) + list(upcoming)
+    
+    return trending

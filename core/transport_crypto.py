@@ -1,3 +1,9 @@
+"""
+Transport Crypto - Data encryption aur decryption ke liye use hota hai.
+Mobile app se server ko data bhejne ke time encryption use hota hai taaki data secure rahe.
+AES-GCM encryption algorithm use kiya gaya hai.
+"""
+
 import base64
 import binascii
 import hashlib
@@ -9,10 +15,11 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
-TRANSPORT_AAD = b"eventify-panel-v1"
-TRANSPORT_KEY_PREFIX = "eventify:"
-IV_LENGTH = 12
-TAG_LENGTH = 16
+# Encryption settings - AES-GCM ke liye constants
+TRANSPORT_AAD = b"eventify-panel-v1"  # Additional authenticated data
+TRANSPORT_KEY_PREFIX = "eventify:"  # Key derive karne ke liye prefix
+IV_LENGTH = 12  # Initialization vector ki length
+TAG_LENGTH = 16  # Authentication tag ki length
 
 
 class PanelPayloadError(ValueError):

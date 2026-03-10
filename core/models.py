@@ -1,14 +1,25 @@
+"""
+Eventify Models - Sabhi database tables yahan define hote hain.
+Yeh models events, bookings, payments ke liye use hoti hain.
+"""
+
 from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
 
 class Profile(models.Model):
+    """
+    Profile model - Har user ki extra information store karta hai.
+    Jaise role (user/organizer/admin), contact, phone, address, etc.
+    """
     ROLE_USER = "user"
     ROLE_ORGANIZER = "organizer"
+    ROLE_ADMIN = "admin"
     ROLE_CHOICES = (
         (ROLE_USER, "User"),
         (ROLE_ORGANIZER, "Organizer"),
+        (ROLE_ADMIN, "Admin"),
     )
 
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
@@ -24,6 +35,20 @@ class Profile(models.Model):
     security_answer_hash = models.CharField(max_length=255, blank=True)
     language = models.CharField(max_length=30, default="English")
     dark_mode = models.BooleanField(default=False)
+    
+    # Email verification
+    email_verified = models.BooleanField(default=False)
+    verification_token = models.CharField(max_length=255, blank=True)
+    
+    # Social login
+    google_id = models.CharField(max_length=255, blank=True)
+    github_id = models.CharField(max_length=255, blank=True)
+    
+    # Two-factor authentication (2FA)
+    two_factor_enabled = models.BooleanField(default=False)
+    two_factor_secret = models.CharField(max_length=255, blank=True)
+    two_factor_backup_codes = models.JSONField(default=list, blank=True)
+    
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -36,6 +61,10 @@ class Profile(models.Model):
 
 
 class OTPRequest(models.Model):
+    """
+    OTP Request model - Login/registration ke liye OTP (One Time Password) store karta hai.
+    Registration, password reset, ya account delete ke time use hota hai.
+    """
     PURPOSE_REGISTER = "register"
     PURPOSE_RESET = "reset"
     PURPOSE_DELETE_ACCOUNT = "delete_account"
@@ -60,7 +89,82 @@ class OTPRequest(models.Model):
         return timezone.now() > self.expires_at
 
 
+class LoginThrottle(models.Model):
+    """Tracks failed login attempts and temporary lockouts."""
+
+    key = models.CharField(max_length=64, unique=True)
+    role = models.CharField(max_length=20, choices=Profile.ROLE_CHOICES)
+    contact = models.CharField(max_length=150)
+    failed_attempts = models.PositiveIntegerField(default=0)
+    locked_until = models.DateTimeField(blank=True, null=True)
+    last_attempt_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-last_attempt_at"]
+
+    def __str__(self):
+        return f"{self.contact} ({self.role})"
+
+
+class SecurityAuditLog(models.Model):
+    """Persistent audit trail for important security and business events."""
+
+    CATEGORY_AUTH = "auth"
+    CATEGORY_ACCOUNT = "account"
+    CATEGORY_EVENT = "event"
+    CATEGORY_BOOKING = "booking"
+    CATEGORY_PAYMENT = "payment"
+    CATEGORY_ADMIN = "admin"
+    CATEGORY_CHOICES = (
+        (CATEGORY_AUTH, "Auth"),
+        (CATEGORY_ACCOUNT, "Account"),
+        (CATEGORY_EVENT, "Event"),
+        (CATEGORY_BOOKING, "Booking"),
+        (CATEGORY_PAYMENT, "Payment"),
+        (CATEGORY_ADMIN, "Admin"),
+    )
+
+    STATUS_INFO = "info"
+    STATUS_SUCCESS = "success"
+    STATUS_FAILURE = "failure"
+    STATUS_CHOICES = (
+        (STATUS_INFO, "Info"),
+        (STATUS_SUCCESS, "Success"),
+        (STATUS_FAILURE, "Failure"),
+    )
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="security_audit_logs",
+    )
+    category = models.CharField(max_length=30, choices=CATEGORY_CHOICES, default=CATEGORY_AUTH)
+    action = models.CharField(max_length=60)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_INFO)
+    actor_contact = models.CharField(max_length=150, blank=True)
+    summary = models.CharField(max_length=255)
+    ip_address = models.GenericIPAddressField(blank=True, null=True)
+    user_agent = models.CharField(max_length=255, blank=True)
+    path = models.CharField(max_length=255, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.category}:{self.action}:{self.status}"
+
+
 class Event(models.Model):
+    """
+    Event model - Har event ki details store karta hai.
+    Jaise title, category, location, date, time, price, description, etc.
+    Organizers apni events create karte hain, aur users book karte hain.
+    """
     title = models.CharField(max_length=180)
     category = models.CharField(max_length=80)
     location = models.CharField(max_length=180)
@@ -135,6 +239,11 @@ class EventHelperSlot(models.Model):
 
 
 class Booking(models.Model):
+    """
+    Booking model - User ki event booking store karta hai.
+    Ek user ek event ke liye booking kar sakta hai.
+    Isme tickets, status, payment status, aur role (attendee/active participant/helper) hota hai.
+    """
     STATUS_PENDING = "pending"
     STATUS_CONFIRMED = "confirmed"
     STATUS_COMPLETED = "completed"
@@ -166,6 +275,13 @@ class Booking(models.Model):
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="bookings")
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="bookings")
+    ticket_type = models.ForeignKey(
+        "TicketType",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="bookings",
+    )
     tickets = models.PositiveIntegerField(default=1)
     attendee_name = models.CharField(max_length=120)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
@@ -235,14 +351,122 @@ class Booking(models.Model):
 
 
 class Payment(models.Model):
+    """
+    Payment model - Booking ke payment ki details store karta hai.
+    Isme amount, method (UPI/Card/Net Banking/Wallet), status, transaction ref hota hai.
+    Har booking ke liye ek ya zyada payments ho sakte hain.
+    """
+    STATUS_PAID = "paid"
+    STATUS_REFUNDED = "refunded"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = (
+        (STATUS_PAID, "Paid"),
+        (STATUS_REFUNDED, "Refunded"),
+        (STATUS_FAILED, "Failed"),
+    )
+
     booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name="payments")
     amount = models.PositiveIntegerField()
     method = models.CharField(max_length=80)
-    status = models.CharField(max_length=20, default="paid")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PAID)
+    transaction_ref = models.CharField(max_length=80, blank=True, default="")
+    upi_id = models.CharField(max_length=120, blank=True, default="")
+    gateway_provider = models.CharField(max_length=80, blank=True, default="")
+    gateway_payment_id = models.CharField(max_length=120, blank=True, default="")
+    verification_signature = models.CharField(max_length=180, blank=True, default="")
+    verification_status = models.CharField(max_length=20, default="verified")
+    failure_reason = models.TextField(blank=True, default="")
+    coupon_code = models.CharField(max_length=40, blank=True, default="")
+    discount_amount = models.PositiveIntegerField(default=0)
+    payment_meta = models.JSONField(default=dict, blank=True)
+    refunded_at = models.DateTimeField(blank=True, null=True)
     paid_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-paid_at", "-id"]
+
+    def __str__(self):
+        return f"{self.booking.ticket_reference} | {self.status} | {self.amount}"
+
+    @property
+    def method_detail_summary(self):
+        meta = self.payment_meta or {}
+        if self.method == "UPI":
+            return meta.get("upi_id") or self.upi_id or "-"
+        if self.method == "Card":
+            holder = meta.get("card_holder_name") or "Card"
+            last4 = meta.get("card_last4") or "----"
+            expiry = meta.get("card_expiry") or "-"
+            return f"{holder} | **** {last4} | {expiry}"
+        if self.method == "Net Banking":
+            bank_name = meta.get("bank_name") or "Bank"
+            account_holder = meta.get("account_holder_name") or "Account"
+            account_last4 = meta.get("account_last4") or "----"
+            return f"{bank_name} | {account_holder} | **** {account_last4}"
+        if self.method == "Wallet":
+            provider = meta.get("wallet_provider") or "Wallet"
+            mobile_last4 = meta.get("wallet_mobile_last4") or "----"
+            return f"{provider} | **** {mobile_last4}"
+        return "-"
+
+
+class PromoCode(models.Model):
+    """
+    PromoCode model - Discount coupons ke liye use hota hai.
+    Organizers promo codes create karte hain jisme percentage ya fixed discount milta hai.
+    Users booking ke time promo code apply kar sakte hain.
+    """
+    DISCOUNT_PERCENTAGE = "percentage"
+    DISCOUNT_FIXED = "fixed"
+    DISCOUNT_CHOICES = (
+        (DISCOUNT_PERCENTAGE, "Percentage"),
+        (DISCOUNT_FIXED, "Fixed"),
+    )
+
+    code = models.CharField(max_length=40, unique=True)
+    description = models.CharField(max_length=160, blank=True)
+    discount_type = models.CharField(max_length=20, choices=DISCOUNT_CHOICES, default=DISCOUNT_PERCENTAGE)
+    discount_value = models.PositiveIntegerField(default=0)
+    active = models.BooleanField(default=True)
+    expires_at = models.DateTimeField(blank=True, null=True)
+    max_uses = models.PositiveIntegerField(default=0)
+    used_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["code"]
+
+    def __str__(self):
+        return self.code
+
+    @property
+    def is_expired(self):
+        if not self.expires_at:
+            return False
+        return self.expires_at <= timezone.now()
+
+    def can_use(self):
+        if not self.active or self.is_expired:
+            return False
+        if self.max_uses and self.used_count >= self.max_uses:
+            return False
+        return True
+
+    def calculate_discount(self, amount):
+        amount_value = max(0, int(amount or 0))
+        discount_value = max(0, int(self.discount_value or 0))
+        if self.discount_type == self.DISCOUNT_FIXED:
+            return min(amount_value, discount_value)
+        percentage_discount = (amount_value * discount_value) // 100
+        return min(amount_value, percentage_discount)
 
 
 class PrivateEventPayment(models.Model):
+    """
+    PrivateEventPayment model - Private events ke liye payment track karta hai.
+    Jab koi organizer private event create karta hai, toh guest emails ke hisab se fee lagta hai.
+    Yeh model us payment ko track karta hai.
+    """
     STATUS_PENDING = "pending"
     STATUS_PAID = "paid"
     STATUS_FAILED = "failed"
@@ -265,6 +489,13 @@ class PrivateEventPayment(models.Model):
     guest_count = models.PositiveIntegerField(default=0)
     amount = models.PositiveIntegerField(default=0)
     method = models.CharField(max_length=80, blank=True)
+    gateway_provider = models.CharField(max_length=80, blank=True, default="")
+    gateway_order_id = models.CharField(max_length=120, blank=True, default="")
+    gateway_payment_id = models.CharField(max_length=120, blank=True, default="")
+    verification_signature = models.CharField(max_length=180, blank=True, default="")
+    verification_status = models.CharField(max_length=20, default="pending")
+    failure_reason = models.TextField(blank=True, default="")
+    payment_meta = models.JSONField(default=dict, blank=True)
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,
@@ -278,6 +509,10 @@ class PrivateEventPayment(models.Model):
 
 
 class Notification(models.Model):
+    """
+    Notification model - Users ko notifications bhejne ke liye use hota hai.
+    Jaise booking confirmation, payment update, event reminders, etc.
+    """
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="notifications")
     title = models.CharField(max_length=160)
     message = models.TextField()
@@ -287,6 +522,11 @@ class Notification(models.Model):
 
 
 class SupportTicket(models.Model):
+    """
+    SupportTicket model - Users ki support tickets ke liye use hota hai.
+    Jab user ko koi problem aata hai, toh ticket create kar sakta hai.
+    Admin team tickets resolve karti hai.
+    """
     STATUS_OPEN = "open"
     STATUS_IN_PROGRESS = "in_progress"
     STATUS_RESOLVED = "resolved"
@@ -301,3 +541,217 @@ class SupportTicket(models.Model):
     message = models.TextField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_OPEN)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class EventReview(models.Model):
+    """
+    EventReview model - Events ke liye reviews aur ratings store karta hai.
+    Users event book karne ke baad review aur rating de sakte hain.
+    Rating 1 se 5 stars mein hoti hai.
+    """
+    RATING_CHOICES = [
+        (1, "1 Star - Poor"),
+        (2, "2 Stars - Fair"),
+        (3, "3 Stars - Good"),
+        (4, "4 Stars - Very Good"),
+        (5, "5 Stars - Excellent"),
+    ]
+
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="reviews")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="event_reviews")
+    rating = models.PositiveIntegerField(choices=RATING_CHOICES)
+    review_text = models.TextField(blank=True, help_text="User ka feedback comment")
+    is_verified_booking = models.BooleanField(default=False, help_text="Kya user ne event book kiya tha")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["event", "user"], name="unique_event_review_per_user"),
+        ]
+
+    def __str__(self):
+        return f"Review for {self.event.title} by {self.user.username} - {self.rating} stars"
+
+    @property
+    def rating_stars(self):
+        """Rating ko stars mein convert karta hai (e.g., 5 -> '★★★★★')"""
+        return "★" * self.rating + "☆" * (5 - self.rating)
+
+
+class EventCategory(models.Model):
+    """
+    EventCategory model - Event categories ke liye use hota hai.
+    Organizers apni events ko categories mein divide karte hain.
+    Example: Music, Wedding, Tech, Sports, Festival, etc.
+    """
+    name = models.CharField(max_length=80, unique=True)
+    slug = models.SlugField(max_length=80, unique=True)
+    description = models.TextField(blank=True)
+    icon = models.CharField(max_length=50, blank=True, help_text="Category icon class name")
+    is_active = models.BooleanField(default=True)
+    display_order = models.PositiveIntegerField(default=0, help_text="Order in which to display categories")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["display_order", "name"]
+        verbose_name_plural = "Event Categories"
+
+    def __str__(self):
+        return self.name
+
+
+class Waitlist(models.Model):
+    """
+    Waitlist model - Full events ke liye waitlist maintain karta hai.
+    Jab event full ho jata hai, toh interested users waitlist mein join kar sakte hain.
+    """
+    STATUS_PENDING = "pending"
+    STATUS_OFFERED = "offered"
+    STATUS_CONFIRMED = "confirmed"
+    STATUS_EXPIRED = "expired"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_OFFERED, "Offered"),
+        (STATUS_CONFIRMED, "Confirmed"),
+        (STATUS_EXPIRED, "Expired"),
+        (STATUS_CANCELLED, "Cancelled"),
+    ]
+
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="waitlist")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="event_waitlist")
+    tickets_requested = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    offer_expires_at = models.DateTimeField(blank=True, null=True)
+    position = models.PositiveIntegerField(help_text="Waitlist mein position")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["position", "created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["event", "user"], name="unique_waitlist_per_user"),
+        ]
+
+    def __str__(self):
+        return f"Waitlist: {self.event.title} - {self.user.username} (#{self.position})"
+
+    def is_offer_expired(self):
+        """Check karta hai ki offer expire ho gaya hai ya nahi"""
+        if self.status != self.STATUS_OFFERED:
+            return False
+        if not self.offer_expires_at:
+            return False
+        return timezone.now() > self.offer_expires_at
+
+
+class TicketType(models.Model):
+    """
+    TicketType model - Events ke liye different ticket types define karta hai.
+    Example: VIP, Regular, Early Bird, Student, etc.
+    Har ticket type ki alag price aur availability hoti hai.
+    """
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="ticket_types")
+    name = models.CharField(max_length=80, help_text="Ticket type ka naam (VIP, Regular, etc.)")
+    description = models.TextField(blank=True)
+    price = models.PositiveIntegerField(default=0)
+    total_quantity = models.PositiveIntegerField(default=0, help_text="Total tickets available")
+    available_quantity = models.PositiveIntegerField(default=0, help_text="Abhi available tickets")
+    max_per_booking = models.PositiveIntegerField(default=10, help_text="Ek booking mein maximum tickets")
+    sales_start = models.DateTimeField(blank=True, null=True, help_text="Kab ticket sale shuru hogi")
+    sales_end = models.DateTimeField(blank=True, null=True, help_text="Kab ticket sale khatam hogi")
+    is_active = models.BooleanField(default=True)
+    display_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["display_order", "price"]
+        unique_together = ["event", "name"]
+
+    def __str__(self):
+        return f"{self.event.title} - {self.name} (₹{self.price})"
+
+    @property
+    def is_available(self):
+        """Check karta hai ki ticket available hai ya nahi"""
+        if not self.is_active:
+            return False
+        if self.available_quantity <= 0:
+            return False
+        now = timezone.now()
+        if self.sales_start and now < self.sales_start:
+            return False
+        if self.sales_end and now > self.sales_end:
+            return False
+        return True
+
+    @property
+    def is_sold_out(self):
+        """Check karta hai ki tickets sold out hain ya nahi"""
+        return self.available_quantity <= 0
+
+
+class EventSchedule(models.Model):
+    """
+    EventSchedule model - Event schedule/agenda management.
+    Allows organizers to create detailed schedules for their events.
+    """
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="schedules")
+    title = models.CharField(max_length=180, help_text="Session/activity title")
+    description = models.TextField(blank=True)
+    start_time = models.TimeField(help_text="Start time of the session")
+    end_time = models.TimeField(help_text="End time of the session")
+    speaker_name = models.CharField(max_length=120, blank=True, help_text="Speaker/host name")
+    speaker_bio = models.TextField(blank=True)
+    location = models.CharField(max_length=180, blank=True, help_text="Room/venue within the event")
+    display_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["display_order", "start_time", "id"]
+        verbose_name_plural = "Event Schedules"
+
+    def __str__(self):
+        return f"{self.event.title} - {self.title} ({self.start_time} - {self.end_time})"
+
+    @property
+    def duration_minutes(self):
+        """Calculate duration in minutes"""
+        if self.start_time and self.end_time:
+            from datetime import datetime, timedelta
+            start = datetime.combine(datetime.today(), self.start_time)
+            end = datetime.combine(datetime.today(), self.end_time)
+            if end < start:
+                end += timedelta(days=1)
+            return int((end - start).total_seconds() / 60)
+        return 0
+
+
+class EventGallery(models.Model):
+    """
+    EventGallery model - Event photo gallery management.
+    Allows organizers to upload multiple images for their events.
+    """
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="gallery_images")
+    image = models.ImageField(upload_to="event_gallery/", help_text="Gallery image")
+    caption = models.CharField(max_length=255, blank=True)
+    is_active = models.BooleanField(default=True)
+    display_order = models.PositiveIntegerField(default=0)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["display_order", "-uploaded_at"]
+        verbose_name_plural = "Event Galleries"
+
+    def __str__(self):
+        return f"Gallery - {self.event.title}"
+
+    @property
+    def image_url(self):
+        try:
+            return self.image.url
+        except ValueError:
+            return ""

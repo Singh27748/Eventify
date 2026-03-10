@@ -20,6 +20,8 @@
             <th>Date</th>
             <th>Location</th>
             <th>Price</th>
+            <th>Ticket Types</th>
+            <th>Private Payment</th>
             <th>Active Role</th>
             <th>Helper Role</th>
             <th>Action</th>
@@ -33,12 +35,29 @@
               <td data-label="Date">{{ event.date|date_human }}</td>
               <td data-label="Location">{{ event.location }}</td>
               <td data-label="Price">{{ event.price|money }}</td>
+              <td data-label="Ticket Types">{{ event.ticket_types_count|default:0 }}</td>
+              <td data-label="Private Payment">
+                {% if event.is_private %}
+                  {% if event.private_payment %}
+                    <span class="badge {{ event.private_payment.status|badge_class }}">{{ event.private_payment.status }}</span>
+                  {% else %}
+                    <span class="badge badge-orange">pending</span>
+                  {% endif %}
+                {% else %}
+                  -
+                {% endif %}
+              </td>
               <td data-label="Active Role">{{ event.active_participants_applied }}/{{ event.active_participants_required }}</td>
               <td data-label="Helper Role">{{ event.helpers_applied }}/{{ event.helpers_required }}</td>
               <td data-label="Action">
                 <div class="action-row">
                   <a href="{% url 'event_detail' event.id %}" class="small-btn">Details</a>
                   <a href="{% url 'edit_event' event.id %}" class="small-btn">Edit</a>
+                  <a href="{% url 'event_schedule_add' event.id %}" class="small-btn">Schedule</a>
+                  <a href="{% url 'event_gallery_add' event.id %}" class="small-btn">Gallery</a>
+                  {% if event.is_private and event.private_payment and event.private_payment.status != 'paid' %}
+                    <a href="{% url 'private_event_payment_page' event.private_payment.id %}" class="small-btn">Pay Private</a>
+                  {% endif %}
                   <form action="{% url 'delete_event' event.id %}" method="post" class="inline-form">
                     {% csrf_token %}
                     <button type="submit" class="danger-btn" data-confirm="Delete this event?">Delete</button>
@@ -47,7 +66,7 @@
               </td>
             </tr>
             <tr class="event-participants-row" id="event-participants-{{ event.id }}">
-              <td colspan="8" data-label="Participants" class="event-participants-cell">
+              <td colspan="10" data-label="Participants" class="event-participants-cell">
                 <div class="event-inline-participants">
                   <div class="event-inline-head">
                     <strong>Participants for {{ event.title }}</strong>
@@ -75,6 +94,7 @@
                             <th>Name</th>
                             <th>Email</th>
                             <th>Phone</th>
+                            <th>Ticket Type</th>
                             <th>Role</th>
                             <th>Tickets</th>
                             <th>Amount</th>
@@ -91,6 +111,7 @@
                               <td>{{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}</td>
                               <td>{{ booking.user.email|default:"-" }}</td>
                               <td>{{ booking.user.profile.phone|default:"-" }}</td>
+                              <td>{{ booking.ticket_type.name|default:"Standard" }}</td>
                               <td>{{ booking.applied_role_label }}</td>
                               <td>{{ booking.tickets }}</td>
                               <td>{{ booking.total_amount|money }}</td>
@@ -110,62 +131,6 @@
                       </table>
                     </div>
 
-                    <div class="attendance-inline-section">
-                      <div class="event-inline-head">
-                        <h4>Attendance List</h4>
-                        <div class="action-row">
-                          <a
-                            href="{% url 'download_event_participants_excel' event.id %}?open=1&amp;section=attendance"
-                            class="small-btn"
-                            target="_blank"
-                            rel="noopener"
-                          >
-                            Open File
-                          </a>
-                          <a href="{% url 'download_event_participants_excel' event.id %}?section=attendance" class="small-btn">
-                            Download Excel
-                          </a>
-                        </div>
-                      </div>
-                      <div class="table-wrap participants-table-wrap">
-                        <table class="attendance-inline-table">
-                          <thead>
-                            <tr>
-                              <th>Name</th>
-                              <th>Ticket ID</th>
-                              <th>Attendance</th>
-                              <th>Attendance Time</th>
-                              <th>Open</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {% for booking in event.participant_bookings %}
-                              <tr>
-                                <td>{{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}</td>
-                                <td>{{ booking.ticket_reference }}</td>
-                                <td>
-                                  {% if booking.attendance_marked_at %}
-                                    Present
-                                  {% else %}
-                                    Pending
-                                  {% endif %}
-                                </td>
-                                <td>
-                                  {% if booking.attendance_marked_at %}
-                                    {{ booking.attendance_marked_at|date:"d M Y, h:i A" }}
-                                  {% else %}
-                                    -
-                                  {% endif %}
-                                </td>
-                                <td>
-                                  <a href="{{ booking.ticket_scan_url }}" class="small-btn">Open</a>
-                                </td>
-                              </tr>
-                            {% endfor %}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
                   {% else %}
                     <p class="empty-text">No participants yet for this event.</p>
                   {% endif %}
@@ -173,7 +138,7 @@
               </td>
             </tr>
           {% empty %}
-            <tr class="empty-row"><td colspan="8" class="empty-cell">No events created yet.</td></tr>
+            <tr class="empty-row"><td colspan="10" class="empty-cell">No events created yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>

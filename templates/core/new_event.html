@@ -57,6 +57,87 @@
       white-space: nowrap;
       border: 0;
     }
+    .ticket-type-toggle {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .ticket-type-toggle-option {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 52px;
+      border: 1px solid #d7e2f5;
+      border-radius: 14px;
+      background: #f7faff;
+      cursor: pointer;
+      font-weight: 700;
+      color: #244787;
+      transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+    }
+    .ticket-type-toggle-option input {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .ticket-type-toggle-option.is-selected {
+      border-color: #1f4fb9;
+      background: #e9f1ff;
+      box-shadow: 0 10px 24px rgba(31, 79, 185, 0.12);
+    }
+    .ticket-type-meta-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 220px) 1fr;
+      gap: 16px;
+      align-items: end;
+      margin-top: 18px;
+    }
+    .ticket-type-builder.is-hidden,
+    .ticket-type-count-wrap.is-hidden {
+      display: none;
+    }
+    .ticket-type-card {
+      padding: 18px;
+      border: 1px solid #dbe5f4;
+      border-radius: 16px;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+      box-shadow: 0 10px 28px rgba(24, 52, 108, 0.08);
+    }
+    .ticket-type-card + .ticket-type-card {
+      margin-top: 14px;
+    }
+    .ticket-type-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .ticket-type-card-head strong {
+      color: #163a76;
+      font-size: 15px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    .ticket-type-empty-note {
+      margin-top: 14px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      background: #f7f9fc;
+      color: #58709b;
+      border: 1px dashed #cbd8ee;
+    }
+    @media (max-width: 760px) {
+      .ticket-type-meta-grid {
+        grid-template-columns: 1fr;
+      }
+      .ticket-type-toggle {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 
   <section class="card">
@@ -113,11 +194,260 @@
             name="price"
             value="{% if edit_mode %}{{ event.price|default:'0' }}{% else %}0{% endif %}"
           />
+          <input type="hidden" name="ticketTypeId[]" value="" />
+          <input type="hidden" name="ticketTypeName[]" value="" />
+          <input type="hidden" name="ticketTypePrice[]" value="0" />
+          <input type="hidden" name="ticketTypeQuantity[]" value="1" />
+          <input type="hidden" name="ticketTypeMaxPerBooking[]" value="1" />
+          <input type="hidden" name="ticketTypeSalesStart[]" value="" />
+          <input type="hidden" name="ticketTypeSalesEnd[]" value="" />
         {% else %}
         <div>
           <label for="event-price">Price</label>
           <input id="event-price" type="number" name="price" min="0" value="{{ event.price|default:'' }}" required />
         </div>
+        {% if show_ticket_types %}
+          {{ ticket_type_rows|json_script:"ticket-type-rows-data" }}
+          <div class="full-width requirement-box">
+            <h3>Public Event Tickets</h3>
+            <p class="muted">Choose whether this public event needs multiple ticket types. If you select no, the event will use the single price field above.</p>
+
+            <div class="ticket-type-toggle" role="radiogroup" aria-labelledby="multi-ticket-question">
+              <label class="ticket-type-toggle-option" data-ticket-mode-card>
+                <input
+                  type="radio"
+                  name="multiTicketMode"
+                  value="yes"
+                  {% if edit_mode and ticket_type_rows %}checked{% endif %}
+                  data-ticket-mode-toggle
+                />
+                <span>Yes</span>
+              </label>
+              <label class="ticket-type-toggle-option" data-ticket-mode-card>
+                <input
+                  type="radio"
+                  name="multiTicketMode"
+                  value="no"
+                  {% if not edit_mode or not ticket_type_rows %}checked{% endif %}
+                  data-ticket-mode-toggle
+                />
+                <span>No</span>
+              </label>
+            </div>
+
+            <div class="ticket-type-meta-grid">
+              <div class="ticket-type-count-wrap{% if not edit_mode or not ticket_type_rows %} is-hidden{% endif %}" data-ticket-count-wrap>
+                <label for="ticket-type-count">How many ticket types do you want to create?</label>
+                <input
+                  id="ticket-type-count"
+                  type="number"
+                  min="1"
+                  max="12"
+                  value="{% if edit_mode and ticket_type_rows %}{{ ticket_type_rows|length }}{% else %}3{% endif %}"
+                  data-ticket-type-count
+                />
+              </div>
+              <div>
+                <p id="multi-ticket-question" class="muted">
+                  Do you want to create multiple ticket types?
+                </p>
+              </div>
+            </div>
+
+            <div class="ticket-type-builder{% if not edit_mode or not ticket_type_rows %} is-hidden{% endif %}" data-ticket-type-builder>
+              <div id="ticket-type-rows"></div>
+              <div class="ticket-type-empty-note" data-ticket-empty-note hidden>
+                Enter a number to generate ticket types.
+              </div>
+            </div>
+          </div>
+          <script>
+            (function () {
+              var rowsDataNode = document.getElementById("ticket-type-rows-data");
+              var rowsWrap = document.getElementById("ticket-type-rows");
+              var priceField = document.getElementById("event-price");
+              var countWrap = document.querySelector("[data-ticket-count-wrap]");
+              var countInput = document.querySelector("[data-ticket-type-count]");
+              var builder = document.querySelector("[data-ticket-type-builder]");
+              var emptyNote = document.querySelector("[data-ticket-empty-note]");
+              var modeInputs = document.querySelectorAll("[data-ticket-mode-toggle]");
+              var modeCards = document.querySelectorAll("[data-ticket-mode-card]");
+              if (!rowsWrap || !priceField || !countWrap || !countInput || !builder || !modeInputs.length) return;
+
+              var defaultRows = [];
+              if (rowsDataNode) {
+                try {
+                  defaultRows = JSON.parse(rowsDataNode.textContent || "[]");
+                } catch (error) {
+                  defaultRows = [];
+                }
+              }
+
+              function getSelectedMode() {
+                var selected = "no";
+                modeInputs.forEach(function (input) {
+                  if (input.checked) selected = input.value;
+                });
+                return selected;
+              }
+
+              function normalizeDateTimeValue(value) {
+                return (value || "").toString().slice(0, 16);
+              }
+
+              function normalizeRow(row, index) {
+                var quantity = parseInt(row.total_quantity || row.available_quantity || 1, 10);
+                if (!quantity || quantity < 1) quantity = 1;
+                var price = parseInt(row.price || 0, 10);
+                if (price < 0) price = 0;
+                var maxPerBooking = parseInt(row.max_per_booking || quantity, 10);
+                if (!maxPerBooking || maxPerBooking < 1) maxPerBooking = quantity;
+                return {
+                  id: row.id || "",
+                  name: row.name || ("Ticket Type " + (index + 1)),
+                  total_quantity: quantity,
+                  price: price,
+                  max_per_booking: Math.min(maxPerBooking, quantity),
+                  sales_start: normalizeDateTimeValue(row.sales_start),
+                  sales_end: normalizeDateTimeValue(row.sales_end)
+                };
+              }
+
+              function escapeHtml(value) {
+                return String(value || "")
+                  .replace(/&/g, "&amp;")
+                  .replace(/"/g, "&quot;")
+                  .replace(/</g, "&lt;")
+                  .replace(/>/g, "&gt;");
+              }
+
+              function captureCurrentRows() {
+                return Array.prototype.slice.call(rowsWrap.querySelectorAll(".ticket-type-row")).map(function (row, index) {
+                  var quantityInput = row.querySelector('[name="ticketTypeQuantity[]"]');
+                  var quantity = parseInt(quantityInput ? quantityInput.value : "1", 10);
+                  if (!quantity || quantity < 1) quantity = 1;
+                  return normalizeRow({
+                    id: (row.querySelector('[name="ticketTypeId[]"]') || {}).value || "",
+                    name: (row.querySelector('[name="ticketTypeName[]"]') || {}).value || "",
+                    total_quantity: quantity,
+                    price: (row.querySelector('[name="ticketTypePrice[]"]') || {}).value || "0",
+                    max_per_booking: (row.querySelector('[name="ticketTypeMaxPerBooking[]"]') || {}).value || quantity,
+                    sales_start: (row.querySelector('[name="ticketTypeSalesStart[]"]') || {}).value || "",
+                    sales_end: (row.querySelector('[name="ticketTypeSalesEnd[]"]') || {}).value || ""
+                  }, index);
+                });
+              }
+
+              function getFallbackRow(index) {
+                if (defaultRows[index]) {
+                  return normalizeRow(defaultRows[index], index);
+                }
+                return normalizeRow({
+                  id: "",
+                  name: "Ticket Type " + (index + 1),
+                  total_quantity: 50,
+                  price: 0,
+                  max_per_booking: 10,
+                  sales_start: "",
+                  sales_end: ""
+                }, index);
+              }
+
+              function buildRowMarkup(index, row) {
+                var rowId = "ticket-type-" + index;
+                return '' +
+                  '<article class="ticket-type-card requirement-grid activity-row ticket-type-row">' +
+                    '<input type="hidden" name="ticketTypeId[]" value="' + escapeHtml(row.id || '') + '" />' +
+                    '<input type="hidden" name="ticketTypeMaxPerBooking[]" value="' + escapeHtml(row.max_per_booking) + '" data-ticket-max-hidden />' +
+                    '<input type="hidden" name="ticketTypeSalesStart[]" value="' + escapeHtml(row.sales_start || '') + '" />' +
+                    '<input type="hidden" name="ticketTypeSalesEnd[]" value="' + escapeHtml(row.sales_end || '') + '" />' +
+                    '<div class="full-width ticket-type-card-head">' +
+                      '<strong>Ticket Type ' + (index + 1) + '</strong>' +
+                    '</div>' +
+                    '<div>' +
+                      '<label for="' + rowId + '-name">Ticket Type Name</label>' +
+                      '<input id="' + rowId + '-name" type="text" name="ticketTypeName[]" maxlength="80" placeholder="VIP, Regular, Student" value="' + escapeHtml(row.name || '') + '" required />' +
+                    '</div>' +
+                    '<div>' +
+                      '<label for="' + rowId + '-quantity">Ticket Quantity</label>' +
+                      '<input id="' + rowId + '-quantity" type="number" name="ticketTypeQuantity[]" min="1" value="' + escapeHtml(row.total_quantity) + '" required data-ticket-quantity-input />' +
+                    '</div>' +
+                    '<div>' +
+                      '<label for="' + rowId + '-price">Ticket Price</label>' +
+                      '<input id="' + rowId + '-price" type="number" name="ticketTypePrice[]" min="0" value="' + escapeHtml(row.price) + '" required />' +
+                    '</div>' +
+                  '</article>';
+              }
+
+              function renderRows(count) {
+                var safeCount = parseInt(count, 10);
+                if (!safeCount || safeCount < 1) {
+                  rowsWrap.innerHTML = "";
+                  emptyNote.hidden = false;
+                  return;
+                }
+
+                emptyNote.hidden = true;
+                var existingRows = captureCurrentRows();
+                var markup = "";
+                for (var index = 0; index < safeCount; index += 1) {
+                  var row = existingRows[index] || getFallbackRow(index);
+                  markup += buildRowMarkup(index, row);
+                }
+                rowsWrap.innerHTML = markup;
+              }
+
+              function setBuilderState(enabled) {
+                builder.classList.toggle("is-hidden", !enabled);
+                countWrap.classList.toggle("is-hidden", !enabled);
+                priceField.disabled = enabled;
+                priceField.required = !enabled;
+                rowsWrap.querySelectorAll("input, select, textarea").forEach(function (field) {
+                  field.disabled = !enabled;
+                });
+                if (enabled) {
+                  renderRows(countInput.value);
+                }
+              }
+
+              function syncModeCards() {
+                modeCards.forEach(function (card) {
+                  var input = card.querySelector("[data-ticket-mode-toggle]");
+                  card.classList.toggle("is-selected", !!input && input.checked);
+                });
+              }
+
+              function syncInterface() {
+                var multipleEnabled = getSelectedMode() === "yes";
+                syncModeCards();
+                setBuilderState(multipleEnabled);
+              }
+
+              countInput.addEventListener("input", function () {
+                if (getSelectedMode() !== "yes") return;
+                renderRows(countInput.value);
+              });
+
+              rowsWrap.addEventListener("input", function (event) {
+                if (!event.target.matches("[data-ticket-quantity-input]")) return;
+                var row = event.target.closest(".ticket-type-row");
+                if (!row) return;
+                var hiddenMaxInput = row.querySelector("[data-ticket-max-hidden]");
+                var quantity = parseInt(event.target.value || "1", 10);
+                if (!quantity || quantity < 1) quantity = 1;
+                if (hiddenMaxInput) {
+                  hiddenMaxInput.value = quantity;
+                }
+              });
+
+              modeInputs.forEach(function (input) {
+                input.addEventListener("change", syncInterface);
+              });
+
+              syncInterface();
+            })();
+          </script>
+        {% endif %}
         {% endif %}
         <div class="full-width">
           <label for="event-image-file">Upload Image (optional)</label>

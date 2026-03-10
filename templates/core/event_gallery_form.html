@@ -1,0 +1,24 @@
+{% extends "core/base_app.html" %}
+{% block title %}Upload Gallery Images | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>Upload Gallery Images</h1>
+    <p>{{ event.title }}</p>
+  </section>
+
+  <section class="card">
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <label for="gallery-images">Select Images</label>
+      <input id="gallery-images" type="file" name="images" accept="image/*" multiple required />
+
+      <label for="gallery-caption">Caption (Optional)</label>
+      <input id="gallery-caption" type="text" name="caption" maxlength="255" />
+
+      <div class="action-row">
+        <button type="submit" class="primary-btn">Upload</button>
+        <a href="{% url 'event_detail' event.id %}" class="small-btn">Back</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

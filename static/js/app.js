@@ -1342,10 +1342,39 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const sidebar = document.getElementById("sidebar");
   const toggle = document.querySelector("[data-toggle-sidebar]");
+  const sidebarBackdrop = document.querySelector("[data-sidebar-backdrop]");
 
   if (toggle && sidebar) {
+    const setSidebarState = (isOpen) => {
+      sidebar.classList.toggle("show", Boolean(isOpen));
+      document.body.classList.toggle("sidebar-open", Boolean(isOpen));
+      if (sidebarBackdrop) {
+        sidebarBackdrop.hidden = !isOpen;
+      }
+    };
+
     toggle.addEventListener("click", () => {
-      sidebar.classList.toggle("show");
+      setSidebarState(!sidebar.classList.contains("show"));
+    });
+
+    if (sidebarBackdrop) {
+      sidebarBackdrop.addEventListener("click", () => {
+        setSidebarState(false);
+      });
+    }
+
+    sidebar.querySelectorAll("a").forEach((link) => {
+      link.addEventListener("click", () => {
+        if (window.innerWidth <= 992) {
+          setSidebarState(false);
+        }
+      });
+    });
+
+    window.addEventListener("resize", () => {
+      if (window.innerWidth > 992) {
+        setSidebarState(false);
+      }
     });
   }
 

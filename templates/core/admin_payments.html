@@ -1,0 +1,55 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Admin Payments | Eventify{% endblock %}
+{% block content %}
+  <div class="admin-page">
+    <section class="admin-page-head">
+      <div class="page-head">
+        <h1>All Payments</h1>
+        <p>Track paid, refunded, and failed transactions across the platform.</p>
+      </div>
+      <div class="admin-page-meta">
+        <span class="admin-page-badge">{{ payments|length }} transactions</span>
+      </div>
+    </section>
+
+    <section class="card admin-table-card">
+      <div class="card-head">
+        <div>
+          <span class="admin-table-kicker">Payment Monitor</span>
+          <h2>Transaction Log</h2>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="mobile-data-table admin-data-table admin-payments-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Event</th>
+              <th>User</th>
+              <th>Method</th>
+              <th>Status</th>
+              <th>Amount</th>
+              <th>Transaction ID</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in payments %}
+              <tr>
+                <td data-label="Date">{{ item.paid_at|datetime_human }}</td>
+                <td data-label="Event">{{ item.booking.event.title }}</td>
+                <td data-label="User">{{ item.booking.user.first_name|default:item.booking.user.username }}</td>
+                <td data-label="Method">{{ item.method|default:'-' }}</td>
+                <td data-label="Status"><span class="badge {{ item.status|badge_class }}">{{ item.status }}</span></td>
+                <td data-label="Amount">{{ item.amount|money }}</td>
+                <td data-label="Transaction ID">{{ item.transaction_ref|default:'-' }}</td>
+              </tr>
+            {% empty %}
+              <tr class="empty-row"><td colspan="7" class="empty-cell">No payment records found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+{% endblock %}

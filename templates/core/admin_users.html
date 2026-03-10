@@ -1,0 +1,53 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Admin Users | Eventify{% endblock %}
+{% block content %}
+  <div class="admin-page">
+    <section class="admin-page-head">
+      <div class="page-head">
+        <h1>All Users</h1>
+        <p>Review registered users, roles, verification state, and security setup.</p>
+      </div>
+      <div class="admin-page-meta">
+        <span class="admin-page-badge">{{ profiles|length }} users</span>
+      </div>
+    </section>
+
+    <section class="card admin-table-card">
+      <div class="card-head">
+        <div>
+          <span class="admin-table-kicker">Account Review</span>
+          <h2>User Directory</h2>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="mobile-data-table admin-data-table admin-users-table">
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Email</th>
+              <th>Role</th>
+              <th>Contact</th>
+              <th>Email Verified</th>
+              <th>2FA</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in profiles %}
+              <tr>
+                <td data-label="User">{{ item.user.first_name|default:item.user.username }}</td>
+                <td data-label="Email">{{ item.user.email|default:'-' }}</td>
+                <td data-label="Role">{{ item.role|title }}</td>
+                <td data-label="Contact">{{ item.contact }}</td>
+                <td data-label="Email Verified">{% if item.email_verified %}Yes{% else %}No{% endif %}</td>
+                <td data-label="2FA">{% if item.two_factor_enabled %}Enabled{% else %}Disabled{% endif %}</td>
+              </tr>
+            {% empty %}
+              <tr class="empty-row"><td colspan="6" class="empty-cell">No users found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+{% endblock %}

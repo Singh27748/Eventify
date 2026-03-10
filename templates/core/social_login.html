@@ -1,0 +1,43 @@
+{% extends "core/base_auth.html" %}
+{% block title %}{{ provider }} Login Setup | Eventify{% endblock %}
+{% block content %}
+  <div class="auth-page">
+    <div class="auth-overlay"></div>
+    <div class="auth-card oauth-setup-shell">
+      <div class="auth-brand">
+        <h1>{{ provider }} OAuth</h1>
+        <p>
+          {% if setup_required %}
+            Configure provider credentials in environment variables, then try again.
+          {% else %}
+            {{ provider }} authentication is temporarily unavailable.
+          {% endif %}
+        </p>
+      </div>
+
+      {% if error_message %}
+        <div class="flash flash-error">{{ error_message }}</div>
+      {% endif %}
+
+      {% if setup_required %}
+        <section class="oauth-setup-card">
+          <h2>Required Variables</h2>
+          <p>Add these variables, restart the server, then try the provider login again.</p>
+          <ul class="oauth-var-list">
+            {% if provider == "Google" %}
+              <li><code class="oauth-var-code">GOOGLE_OAUTH_CLIENT_ID</code></li>
+              <li><code class="oauth-var-code">GOOGLE_OAUTH_CLIENT_SECRET</code></li>
+            {% else %}
+              <li><code class="oauth-var-code">GITHUB_OAUTH_CLIENT_ID</code></li>
+              <li><code class="oauth-var-code">GITHUB_OAUTH_CLIENT_SECRET</code></li>
+            {% endif %}
+          </ul>
+        </section>
+      {% endif %}
+
+      <div class="oauth-setup-actions">
+        <a href="{% url 'auth_page' %}?tab=login" class="inline-link">Back to Login</a>
+      </div>
+    </div>
+  </div>
+{% endblock %}

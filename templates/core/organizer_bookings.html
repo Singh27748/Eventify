@@ -16,6 +16,7 @@
             <th>Customer</th>
             <th>Event</th>
             <th>Date</th>
+            <th>Ticket Type</th>
             <th>Tickets</th>
             <th>Applied Role</th>
             <th>Status</th>
@@ -29,13 +30,14 @@
               <td data-label="Customer">{{ item.user.first_name|default:item.user.username }}</td>
               <td data-label="Event">{{ item.event.title }}</td>
               <td data-label="Date">{{ item.event.date|date_human }}</td>
+              <td data-label="Ticket Type">{{ item.ticket_type.name|default:'Standard' }}</td>
               <td data-label="Tickets">{{ item.tickets }}</td>
               <td data-label="Applied Role">{{ item.applied_role_label }}</td>
               <td data-label="Status"><span class="badge {{ item.status|badge_class }}">{{ item.status }}</span></td>
               <td data-label="Amount">{{ item.total_amount|money }}</td>
             </tr>
           {% empty %}
-            <tr class="empty-row"><td colspan="8" class="empty-cell">No bookings available yet.</td></tr>
+            <tr class="empty-row"><td colspan="9" class="empty-cell">No bookings available yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>

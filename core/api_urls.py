@@ -11,4 +11,5 @@ urlpatterns = [
         name="api_register_verify_otp",
     ),
     path("events/", api_views.api_events, name="api_events"),
+    path("events/trending/", api_views.api_trending_events, name="api_trending_events"),
 ]

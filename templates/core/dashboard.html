@@ -208,10 +208,22 @@
         <strong>{{ stats.total_bookings }}</strong>
       </article>
       <article class="stat-card green">
-        <h3>Total Revenue</h3>
+        <h3>Net Revenue</h3>
         <strong>{{ stats.total_revenue|money }}</strong>
       </article>
       <article class="stat-card orange">
+        <h3>Total Tickets Sold</h3>
+        <strong>{{ stats.total_tickets_sold }}</strong>
+      </article>
+      <article class="stat-card purple">
+        <h3>Gross Earnings</h3>
+        <strong>{{ stats.gross_earnings|money }}</strong>
+      </article>
+      <article class="stat-card orange">
+        <h3>Total Refunds</h3>
+        <strong>{{ stats.refund_total|money }}</strong>
+      </article>
+      <article class="stat-card blue">
         <h3>Pending Requests</h3>
         <strong>{{ stats.pending_requests }}</strong>
       </article>
@@ -234,6 +246,45 @@
       </article>
     {% endif %}
   </section>
+
+  {% if role_mode == "organizer" %}
+    <section class="card">
+      <div class="card-head">
+        <h2>Event-wise Revenue</h2>
+        <a href="{% url 'payment_history' %}">View Transactions</a>
+      </div>
+      <div class="table-wrap">
+        <table class="mobile-data-table">
+          <thead>
+            <tr>
+              <th>Event</th>
+              <th>Date</th>
+              <th>Tickets Sold</th>
+              <th>Gross</th>
+              <th>Refunds</th>
+              <th>Net</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in revenue_rows %}
+              <tr>
+                <td data-label="Event">{{ row.event.title }}</td>
+                <td data-label="Date">{{ row.event.date|date_human }}</td>
+                <td data-label="Tickets Sold">{{ row.tickets_sold }}</td>
+                <td data-label="Gross">{{ row.gross|money }}</td>
+                <td data-label="Refunds">{{ row.refunds|money }}</td>
+                <td data-label="Net">{{ row.net|money }}</td>
+              </tr>
+            {% empty %}
+              <tr class="empty-row">
+                <td colspan="6" class="empty-cell">No revenue data found.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endif %}
 
   <section class="split-grid">
     <div class="card">

@@ -1,0 +1,53 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Admin Events | Eventify{% endblock %}
+{% block content %}
+  <div class="admin-page">
+    <section class="admin-page-head">
+      <div class="page-head">
+        <h1>All Events</h1>
+        <p>View every public and private event on the platform.</p>
+      </div>
+      <div class="admin-page-meta">
+        <span class="admin-page-badge">{{ events|length }} events</span>
+      </div>
+    </section>
+
+    <section class="card admin-table-card">
+      <div class="card-head">
+        <div>
+          <span class="admin-table-kicker">Catalog View</span>
+          <h2>Event Registry</h2>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="mobile-data-table admin-data-table admin-events-table">
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Category</th>
+              <th>Date</th>
+              <th>Organizer</th>
+              <th>Type</th>
+              <th>Price</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in events %}
+              <tr>
+                <td data-label="Title"><a href="{% url 'event_detail' item.id %}">{{ item.title }}</a></td>
+                <td data-label="Category">{{ item.category }}</td>
+                <td data-label="Date">{{ item.date|date_human }}</td>
+                <td data-label="Organizer">{{ item.organizer_name|default:item.created_by.username }}</td>
+                <td data-label="Type">{% if item.is_private %}Private{% else %}Public{% endif %}</td>
+                <td data-label="Price">{{ item.price|money }}</td>
+              </tr>
+            {% empty %}
+              <tr class="empty-row"><td colspan="6" class="empty-cell">No events found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+{% endblock %}

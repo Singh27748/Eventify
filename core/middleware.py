@@ -1,8 +1,23 @@
+"""
+Middleware - Request aur response ke beech ka code jo har request ke saath chalega.
+Yahan hum encrypted data handle karte hain mobile app ke liye.
+"""
+
 import json
+from datetime import datetime
 from typing import Any
 
+from django.contrib import messages
+from django.contrib.auth import logout
 from django.http import HttpResponseBadRequest, JsonResponse, QueryDict
+from django.shortcuts import redirect
+from django.utils import timezone
 
+from .security_controls import (
+    get_session_timeout_seconds,
+    initialize_secure_session,
+    record_audit_log,
+)
 from .transport_crypto import PanelPayloadError, decrypt_panel_payload, encrypt_panel_payload
 
 
@@ -113,3 +128,88 @@ class PanelTransportEncryptionMiddleware:
                 querydict.setlist(key, [self._normalize_value(item) for item in value])
                 continue
             querydict[key] = self._normalize_value(value)
+
+
+class SecurityHeadersMiddleware:
+    """Adds defensive response headers to every response."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        response.setdefault("X-XSS-Protection", "1; mode=block")
+        response.setdefault("Referrer-Policy", "same-origin")
+        response.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        response.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        return response
+
+
+class SessionSecurityMiddleware:
+    """Logs users out after a period of inactivity."""
+
+    session_key = "last_activity_at"
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        timeout_response = self._maybe_expire_session(request)
+        if timeout_response is not None:
+            return timeout_response
+        response = self.get_response(request)
+        self._refresh_activity_window(request)
+        return response
+
+    def _maybe_expire_session(self, request):
+        if not getattr(request, "user", None) or not request.user.is_authenticated:
+            return None
+
+        timeout_seconds = get_session_timeout_seconds()
+        if timeout_seconds <= 0:
+            return None
+
+        last_activity_raw = request.session.get(self.session_key)
+        if not last_activity_raw:
+            initialize_secure_session(request)
+            return None
+
+        try:
+            last_activity = datetime.fromisoformat(last_activity_raw)
+        except ValueError:
+            initialize_secure_session(request)
+            return None
+
+        if timezone.is_naive(last_activity):
+            last_activity = timezone.make_aware(last_activity, timezone.get_current_timezone())
+
+        now = timezone.now()
+        if (now - last_activity).total_seconds() <= timeout_seconds:
+            return None
+
+        expired_user = request.user
+        record_audit_log(
+            action="session_timeout",
+            summary="Session expired after inactivity timeout.",
+            category="auth",
+            status="info",
+            request=request,
+            user=expired_user,
+        )
+        logout(request)
+        if request.path.startswith("/api/"):
+            return JsonResponse(
+                {"ok": False, "error": "Session expired after inactivity. Please log in again."},
+                status=401,
+            )
+        timeout_minutes = max(1, int(round(timeout_seconds / 60)))
+        messages.warning(
+            request,
+            f"Session expired after {timeout_minutes} minute(s) of inactivity. Please sign in again.",
+        )
+        return redirect("auth_page")
+
+    def _refresh_activity_window(self, request):
+        if not getattr(request, "user", None) or not request.user.is_authenticated:
+            return
+        initialize_secure_session(request)

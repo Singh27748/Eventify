@@ -1,0 +1,51 @@
+{% extends "core/base_app.html" %}
+{% block title %}Setup 2FA | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>Setup Two-Factor Authentication</h1>
+    <p>Scan the QR code in Google Authenticator, GitHub Mobile, Authy, or any TOTP app.</p>
+  </section>
+
+  <section class="split-grid">
+    <div class="card">
+      <h2>Authenticator App</h2>
+      <img src="{{ qr_code_data_uri }}" alt="TOTP QR code" style="max-width: 220px; width: 100%; border-radius: 12px;" />
+      <p style="margin-top: 12px;"><strong>Secret:</strong> <code>{{ secret }}</code></p>
+      <p class="muted">If scanning does not work, enter the secret manually in your authenticator app.</p>
+    </div>
+
+    <div class="card">
+      <h2>Backup Codes</h2>
+      <p class="muted">Each backup code can be used once. Keep them safe before enabling 2FA.</p>
+      <div class="table-wrap">
+        <table class="mobile-data-table">
+          <thead>
+            <tr><th>#</th><th>Backup Code</th></tr>
+          </thead>
+          <tbody>
+            {% for code in backup_codes %}
+              <tr>
+                <td data-label="#">{{ forloop.counter }}</td>
+                <td data-label="Backup Code">{{ code }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Enable 2FA</h2>
+    <p class="muted">Enter the current 6-digit code from your authenticator app to confirm setup.</p>
+    <form action="{% url 'enable_2fa' %}" method="post">
+      {% csrf_token %}
+      <label for="totp-code">Authenticator Code</label>
+      <input id="totp-code" type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="123456" required />
+      <button type="submit" class="primary-btn">Enable 2FA</button>
+    </form>
+    <div class="action-row" style="margin-top: 12px;">
+      <a href="{% url 'settings' %}" class="small-btn">Back to Settings</a>
+    </div>
+  </section>
+{% endblock %}

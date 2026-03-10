@@ -10,6 +10,7 @@
   <section class="split-grid">
     <div class="card">
       <h2>Security</h2>
+      <p class="muted">Passwords now require uppercase, lowercase, number, and special characters. Inactive sessions expire automatically.</p>
       <form action="{% url 'settings_password' %}" method="post">
         {% csrf_token %}
         <label for="oldPassword">Old Password</label>
@@ -48,6 +49,30 @@
 
         <button type="submit" class="primary-btn">Save Preferences</button>
       </form>
+    </div>
+
+    <div class="card">
+      <h2>Email Verification</h2>
+      {% if current_profile.email_verified %}
+        <p class="muted">Your email is verified.</p>
+      {% else %}
+        <p class="muted">Verify your email to improve account security and trusted booking alerts.</p>
+        <form action="{% url 'verify_email' %}" method="post">
+          {% csrf_token %}
+          <button type="submit" class="primary-btn">Send Verification Email</button>
+        </form>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Two-Factor Authentication</h2>
+      {% if current_profile.two_factor_enabled %}
+        <p class="muted">2FA is enabled. Use your authenticator app code or a backup code during login.</p>
+        <a href="{% url 'disable_2fa' %}" class="small-btn">Disable 2FA</a>
+      {% else %}
+        <p class="muted">Enable 2FA to require a TOTP authenticator code at login.</p>
+        <a href="{% url 'setup_2fa' %}" class="small-btn">Setup 2FA</a>
+      {% endif %}
     </div>
   </section>
 

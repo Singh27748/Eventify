@@ -4,7 +4,7 @@
 {% block content %}
   <section class="page-head">
     <h1>Private Event Payment</h1>
-    <p>Complete payment to send invitations to all private-event guests.</p>
+    <p>Complete payment to activate guest invitations for your private event.</p>
   </section>
 
   <section class="split-grid">
@@ -13,29 +13,141 @@
       <p><strong>Event:</strong> {{ private_payment.event.title }}</p>
       <p><strong>Date:</strong> {{ private_payment.event.date|date_human }} | {{ private_payment.event.time }}</p>
       <p><strong>Location:</strong> {{ private_payment.event.location }}</p>
-      <p><strong>Guest Emails:</strong> {{ private_payment.guest_count }}</p>
+      <p><strong>Guest Count:</strong> {{ private_payment.guest_count }}</p>
       <p><strong>Rate:</strong> INR 10 per guest email</p>
       <p><strong>Total Amount:</strong> {{ private_payment.amount|money }}</p>
+      <p><strong>Payment Status:</strong> {{ private_payment.status|title }}</p>
     </div>
 
     <div class="card">
-      <h2>Choose Payment Method</h2>
-      <form action="{% url 'private_event_payment_pay' private_payment.id %}" method="post">
-        {% csrf_token %}
-        <label class="radio-row">
-          <input type="radio" name="method" value="UPI" required />
-          <span>UPI</span>
-        </label>
-        <label class="radio-row">
-          <input type="radio" name="method" value="Card" required />
-          <span>Credit/Debit Card</span>
-        </label>
-        <label class="radio-row">
-          <input type="radio" name="method" value="Net Banking" required />
-          <span>Net Banking</span>
-        </label>
-        <button type="submit" class="primary-btn">Pay {{ private_payment.amount|money }}</button>
-      </form>
+      <h2>{% if razorpay_enabled %}Secure Checkout{% else %}Choose Payment Method{% endif %}</h2>
+
+      {% if razorpay_enabled %}
+        <p class="muted">Private event activation uses Razorpay for verified online payment.</p>
+        <form action="{% url 'private_event_payment_pay' private_payment.id %}" method="post">
+          {% csrf_token %}
+          <button type="submit" class="primary-btn">Continue to Razorpay</button>
+        </form>
+      {% else %}
+        <p class="muted">Private-event payment will unlock invitation emails for all guests.</p>
+        <form action="{% url 'private_event_payment_pay' private_payment.id %}" method="post">
+          {% csrf_token %}
+          <div class="payment-method-selector-grid">
+            {% for payment_method in payment_methods %}
+              <label class="radio-row payment-method-option{% if forloop.first %} is-active{% endif %}">
+                <input type="radio" name="method" value="{{ payment_method }}" {% if forloop.first %}checked{% endif %} required />
+                <span>{{ payment_method }}</span>
+              </label>
+            {% endfor %}
+          </div>
+
+          <div class="payment-method-panel" data-payment-panel="UPI">
+            <div class="payment-method-panel-head">
+              <h3>UPI Details</h3>
+              <p class="muted">UPI select karne par UPI ID enter karein.</p>
+            </div>
+            <label for="private-payment-upi-id">UPI ID</label>
+            <input id="private-payment-upi-id" type="text" name="upiId" maxlength="120" placeholder="example@bank" data-payment-required />
+          </div>
+
+          <div class="payment-method-panel" data-payment-panel="Card" hidden>
+            <div class="payment-method-panel-head">
+              <h3>Card Details</h3>
+              <p class="muted">Card holder, card number, expiry aur CVV enter karein.</p>
+            </div>
+            <label for="private-payment-card-holder-name">Card Holder Name</label>
+            <input id="private-payment-card-holder-name" type="text" name="cardHolderName" maxlength="120" placeholder="Name on card" data-payment-required />
+
+            <label for="private-payment-card-number">Card Number</label>
+            <input id="private-payment-card-number" type="text" name="cardNumber" maxlength="23" inputmode="numeric" placeholder="1234 5678 9012 3456" data-payment-required />
+
+            <div class="payment-method-inline-grid">
+              <div>
+                <label for="private-payment-card-expiry">Expiry</label>
+                <input id="private-payment-card-expiry" type="text" name="cardExpiry" maxlength="7" placeholder="MM/YY" data-payment-required />
+              </div>
+              <div>
+                <label for="private-payment-card-cvv">CVV</label>
+                <input id="private-payment-card-cvv" type="password" name="cardCvv" maxlength="4" inputmode="numeric" placeholder="123" data-payment-required />
+              </div>
+            </div>
+          </div>
+
+          <div class="payment-method-panel" data-payment-panel="Net Banking" hidden>
+            <div class="payment-method-panel-head">
+              <h3>Net Banking Details</h3>
+              <p class="muted">Bank name, account holder aur account number enter karein.</p>
+            </div>
+            <label for="private-payment-bank-name">Bank Name</label>
+            <input id="private-payment-bank-name" type="text" name="bankName" maxlength="120" placeholder="Your bank name" data-payment-required />
+
+            <label for="private-payment-account-holder-name">Account Holder Name</label>
+            <input id="private-payment-account-holder-name" type="text" name="accountHolderName" maxlength="120" placeholder="Account holder name" data-payment-required />
+
+            <label for="private-payment-account-number">Account Number</label>
+            <input id="private-payment-account-number" type="text" name="accountNumber" maxlength="18" inputmode="numeric" placeholder="Account number" data-payment-required />
+          </div>
+
+          <div class="payment-method-panel" data-payment-panel="Wallet" hidden>
+            <div class="payment-method-panel-head">
+              <h3>Wallet Details</h3>
+              <p class="muted">Wallet provider aur linked mobile number enter karein.</p>
+            </div>
+            <label for="private-payment-wallet-provider">Wallet Provider</label>
+            <select id="private-payment-wallet-provider" name="walletProvider" data-payment-required>
+              <option value="">Select wallet</option>
+              <option value="Paytm">Paytm</option>
+              <option value="PhonePe Wallet">PhonePe Wallet</option>
+              <option value="Amazon Pay">Amazon Pay</option>
+              <option value="Mobikwik">Mobikwik</option>
+              <option value="Freecharge">Freecharge</option>
+            </select>
+
+            <label for="private-payment-wallet-mobile">Wallet Mobile Number</label>
+            <input id="private-payment-wallet-mobile" type="text" name="walletMobile" maxlength="12" inputmode="numeric" placeholder="Wallet mobile number" data-payment-required />
+          </div>
+
+          <button type="submit" class="primary-btn">Pay {{ private_payment.amount|money }}</button>
+        </form>
+      {% endif %}
     </div>
   </section>
+
+  {% if not razorpay_enabled %}
+    <script>
+      (function () {
+        var methodInputs = document.querySelectorAll('input[name="method"]');
+        var panels = document.querySelectorAll('[data-payment-panel]');
+        var methodOptions = document.querySelectorAll('.payment-method-option');
+        if (!methodInputs.length || !panels.length) return;
+
+        function syncPanels() {
+          var activeMethod = "UPI";
+          methodInputs.forEach(function (input) {
+            if (input.checked) activeMethod = input.value;
+          });
+
+          methodOptions.forEach(function (option) {
+            var input = option.querySelector('input[name="method"]');
+            option.classList.toggle("is-active", !!input && input.checked);
+          });
+
+          panels.forEach(function (panel) {
+            var isActive = panel.getAttribute("data-payment-panel") === activeMethod;
+            panel.hidden = !isActive;
+            panel.querySelectorAll("input, select, textarea").forEach(function (field) {
+              var shouldRequire = field.hasAttribute("data-payment-required");
+              field.disabled = !isActive;
+              field.required = isActive && shouldRequire;
+            });
+          });
+        }
+
+        methodInputs.forEach(function (input) {
+          input.addEventListener("change", syncPanels);
+        });
+        syncPanels();
+      })();
+    </script>
+  {% endif %}
 {% endblock %}

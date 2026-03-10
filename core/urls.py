@@ -1,3 +1,9 @@
+"""
+URL Configuration - Website ke sabhi routes yahan define hote hain.
+Har URL map karta hai ek view function ko.
+Example: /dashboard/ -> dashboard view
+"""
+
 from django.urls import path
 
 from . import views
@@ -8,6 +14,9 @@ urlpatterns = [
     path("newsletter-subscribe/", views.newsletter_subscribe, name="newsletter_subscribe"),
     path("auth/", views.auth_page, name="auth_page"),
     path("login/", views.login_submit, name="login_submit"),
+    path("auth/social/google/", views.social_login_google, name="social_login_google"),
+    path("auth/social/github/", views.social_login_github, name="social_login_github"),
+    path("auth/2fa/verify/", views.verify_2fa, name="verify_2fa"),
     path("register/send-otp/", views.register_send_otp, name="register_send_otp"),
     path("verify-otp/", views.verify_otp, name="verify_otp"),
     path("forgot-password/", views.forgot_password, name="forgot_password"),
@@ -20,6 +29,7 @@ urlpatterns = [
     path("book/<int:event_id>/", views.book_event, name="book_event"),
     path("payment/<int:booking_id>/", views.payment_page, name="payment_page"),
     path("payment/<int:booking_id>/pay/", views.payment_pay, name="payment_pay"),
+    path("payment/<int:booking_id>/verify/", views.payment_verify, name="payment_verify"),
     path("booking-success/<int:booking_id>/", views.booking_success, name="booking_success"),
     path("my-bookings/", views.my_bookings, name="my_bookings"),
     path("my-bookings/<int:booking_id>/ticket-pdf/", views.download_ticket_pdf, name="download_ticket_pdf"),
@@ -27,6 +37,7 @@ urlpatterns = [
     path("ticket-scan/<str:token>/", views.ticket_qr_scan, name="ticket_qr_scan"),
     path("my-bookings/<int:booking_id>/cancel/", views.cancel_booking, name="cancel_booking"),
     path("event-history/", views.event_history, name="event_history"),
+    path("payment-history/", views.payment_history, name="payment_history"),
     path("invoices/", views.invoices, name="invoices"),
     path("invoices/<int:booking_id>/download/", views.download_invoice, name="download_invoice"),
     path("profile/", views.profile_view, name="profile"),
@@ -34,6 +45,11 @@ urlpatterns = [
     path("settings/password/", views.settings_password, name="settings_password"),
     path("settings/security-question/", views.settings_security_question, name="settings_security_question"),
     path("settings/preferences/", views.settings_preferences, name="settings_preferences"),
+    path("settings/email-verification/", views.verify_email, name="verify_email"),
+    path("verify-email-confirm/", views.verify_email_confirm, name="verify_email_confirm"),
+    path("settings/2fa/setup/", views.setup_2fa, name="setup_2fa"),
+    path("settings/2fa/enable/", views.enable_2fa, name="enable_2fa"),
+    path("settings/2fa/disable/", views.disable_2fa, name="disable_2fa"),
     path("notifications/", views.notifications_view, name="notifications"),
     path(
         "notifications/mark-all-read/",
@@ -51,6 +67,15 @@ urlpatterns = [
     path("my-events/new/", views.new_event, name="new_event"),
     path("my-events/<int:event_id>/edit/", views.edit_event, name="edit_event"),
     path("my-events/<int:event_id>/delete/", views.delete_event, name="delete_event"),
+    path("my-events/<int:event_id>/schedule/add/", views.event_schedule_add, name="event_schedule_add"),
+    path("my-events/schedule/<int:schedule_id>/edit/", views.event_schedule_edit, name="event_schedule_edit"),
+    path(
+        "my-events/schedule/<int:schedule_id>/delete/",
+        views.event_schedule_delete,
+        name="event_schedule_delete",
+    ),
+    path("my-events/<int:event_id>/gallery/add/", views.event_gallery_add, name="event_gallery_add"),
+    path("my-events/gallery/<int:gallery_id>/delete/", views.event_gallery_delete, name="event_gallery_delete"),
     path(
         "my-events/private-payment/<int:payment_id>/",
         views.private_event_payment_page,
@@ -61,6 +86,22 @@ urlpatterns = [
         views.private_event_payment_pay,
         name="private_event_payment_pay",
     ),
+    path(
+        "my-events/private-payment/<int:payment_id>/verify/",
+        views.private_event_payment_verify,
+        name="private_event_payment_verify",
+    ),
     path("organizer-bookings/", views.organizer_bookings, name="organizer_bookings"),
+    path("platform-admin/dashboard/", views.admin_dashboard, name="admin_dashboard"),
+    path("platform-admin/events/", views.admin_events, name="admin_events"),
+    path("platform-admin/users/", views.admin_users, name="admin_users"),
+    path("platform-admin/bookings/", views.admin_bookings, name="admin_bookings"),
+    path("platform-admin/payments/", views.admin_payments, name="admin_payments"),
+    path("platform-admin/support/", views.admin_support, name="admin_support"),
+    path(
+        "platform-admin/support/<int:ticket_id>/resolve/",
+        views.admin_resolve_ticket,
+        name="admin_resolve_ticket",
+    ),
     path("account/delete/", views.delete_account, name="delete_account"),
 ]

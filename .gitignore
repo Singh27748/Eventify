@@ -1,6 +1,7 @@
 node_modules/
 data/*.db
 npm-debug.log*
+.env
 db.sqlite3
 __pycache__/
 *.pyc

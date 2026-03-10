@@ -1,11 +1,17 @@
+from datetime import timedelta
+import hashlib
+import hmac
 import json
 import secrets
+from io import StringIO
+from unittest import mock
 
 from django.contrib.messages import get_messages
 from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.models import User
 from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.http import JsonResponse
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
@@ -18,10 +24,15 @@ from .models import (
     Event,
     EventActivitySlot,
     EventHelperSlot,
+    LoginThrottle,
+    Notification,
     OTPRequest,
     Payment,
     PrivateEventPayment,
     Profile,
+    PromoCode,
+    SecurityAuditLog,
+    TicketType,
 )
 from .api_views import _build_auth_username, _build_unique_auth_username
 from .transport_crypto import (
@@ -31,6 +42,7 @@ from .transport_crypto import (
     decrypt_panel_payload,
     encrypt_panel_payload,
 )
+from .security import generate_totp_code
 from .views import (
     build_auth_username,
     build_unique_auth_username,
@@ -196,8 +208,8 @@ class ApiEndpointsTests(TestCase):
                     "role": Profile.ROLE_USER,
                     "name": "New API User",
                     "contact": "new-api-user@example.com",
-                    "password": "secret123",
-                    "confirmPassword": "secret123",
+                    "password": "StrongPass#123",
+                    "confirmPassword": "StrongPass#123",
                 }
             ),
             content_type="application/json",
@@ -255,6 +267,190 @@ class ApiEndpointsTests(TestCase):
         self.assertTrue(body["ok"])
         self.assertGreaterEqual(body["count"], 1)
         self.assertTrue(any(event["title"] == "API Event" for event in body["events"]))
+
+
+class HomeContactFormTests(TestCase):
+    @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+    def test_connect_form_sends_email_to_all_team_members(self):
+        response = self.client.post(
+            reverse("newsletter_subscribe"),
+            data={
+                "email": "visitor@example.com",
+                "question": "I need help choosing an event.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("home"))
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(
+            sorted(mail.outbox[0].to),
+            sorted(
+                [
+                    "vishwakarmaayush3884@gmail.com",
+                    "2023bca136@axiscolleges.in",
+                    "asing27748@gmail.com",
+                ]
+            ),
+        )
+        self.assertIn("visitor@example.com", mail.outbox[0].body)
+        self.assertIn("I need help choosing an event.", mail.outbox[0].body)
+
+    @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+    def test_connect_form_does_not_send_without_question(self):
+        response = self.client.post(
+            reverse("newsletter_subscribe"),
+            data={
+                "email": "visitor@example.com",
+                "question": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 0)
+        feedback = [message.message for message in get_messages(response.wsgi_request)]
+        self.assertTrue(any("Please enter your question." in message for message in feedback))
+
+
+class HomePastEventsAlbumTests(TestCase):
+    def test_home_past_album_contains_only_past_public_events(self):
+        Event.objects.create(
+            title="Past Event",
+            category="Music",
+            location="Delhi",
+            date=timezone.localdate() - timedelta(days=5),
+            time="7:00 PM - 9:00 PM",
+            price=500,
+            description="Past event should appear in the album.",
+            image_url="https://example.com/past-event.jpg",
+            organizer_name="Past Organizer",
+            organizer_phone="+91 9000000001",
+            organizer_email="past@example.com",
+        )
+        Event.objects.create(
+            title="Future Event",
+            category="Tech",
+            location="Noida",
+            date=timezone.localdate() + timedelta(days=5),
+            time="10:00 AM - 1:00 PM",
+            price=800,
+            description="Future event must not appear in the past album.",
+            image_url="https://example.com/future-event.jpg",
+            organizer_name="Future Organizer",
+            organizer_phone="+91 9000000002",
+            organizer_email="future@example.com",
+        )
+
+        response = self.client.get(reverse("home"))
+
+        self.assertEqual(response.status_code, 200)
+        past_titles = [event.title for event in response.context["past_events_album"]]
+        self.assertEqual(past_titles, ["Past Event"])
+
+
+class SecurityHardeningTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="security-user@example.com",
+            password="secret123",
+            first_name="Security User",
+            email="security-user@example.com",
+        )
+        self.profile = self.user.profile
+
+    @staticmethod
+    def _json(response):
+        return json.loads(response.content.decode("utf-8"))
+
+    @override_settings(LOGIN_LOCKOUT_ATTEMPTS=2, LOGIN_LOCKOUT_MINUTES=10)
+    def test_login_rate_limit_locks_account_after_failed_attempts(self):
+        response = self.client.post(
+            reverse("login_submit"),
+            data={
+                "role": Profile.ROLE_USER,
+                "contact": "security-user@example.com",
+                "password": "wrong-password",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        response = self.client.post(
+            reverse("login_submit"),
+            data={
+                "role": Profile.ROLE_USER,
+                "contact": "security-user@example.com",
+                "password": "wrong-password",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Too many failed login attempts")
+        throttle = LoginThrottle.objects.get(contact="security-user@example.com", role=Profile.ROLE_USER)
+        self.assertIsNotNone(throttle.locked_until)
+        self.assertTrue(
+            SecurityAuditLog.objects.filter(action="login_failed", actor_contact="security-user@example.com").exists()
+        )
+
+    def test_api_register_rejects_weak_password(self):
+        response = self.client.post(
+            "/api/register/send-otp/",
+            data=json.dumps(
+                {
+                    "role": Profile.ROLE_USER,
+                    "name": "Weak Password User",
+                    "contact": "weak-password@example.com",
+                    "password": "weakpass",
+                    "confirmPassword": "weakpass",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        body = self._json(response)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(body["ok"])
+        self.assertIn("uppercase", body["error"].lower())
+
+    @override_settings(SESSION_INACTIVITY_TIMEOUT=1)
+    def test_session_timeout_logs_user_out_after_inactivity(self):
+        self.client.force_login(self.user)
+        session = self.client.session
+        session["last_activity_at"] = (timezone.now() - timedelta(minutes=31)).isoformat()
+        session.save()
+
+        response = self.client.get(reverse("dashboard"), follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("_auth_user_id", self.client.session)
+        feedback = [message.message for message in get_messages(response.wsgi_request)]
+        self.assertTrue(any("Session expired after 1 minute(s) of inactivity" in item for item in feedback))
+        self.assertTrue(SecurityAuditLog.objects.filter(action="session_timeout", user=self.user).exists())
+
+    def test_api_login_rejects_accounts_with_2fa_enabled(self):
+        self.profile.two_factor_enabled = True
+        self.profile.save(update_fields=["two_factor_enabled"])
+
+        response = self.client.post(
+            "/api/login/",
+            data=json.dumps(
+                {
+                    "role": Profile.ROLE_USER,
+                    "contact": "security-user@example.com",
+                    "password": "secret123",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        body = self._json(response)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(body["ok"])
+        self.assertIn("2fa-enabled", body["error"].lower())
 
 
 class UsernameGenerationTests(TestCase):
@@ -657,9 +853,9 @@ class EventParticipantsExportTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "core/event_participants_table.html")
         self.assertContains(response, "Participants")
-        self.assertContains(response, "Attendance List")
+        self.assertNotContains(response, "Attendance List")
         self.assertContains(response, self.booking.ticket_reference)
-        self.assertContains(response, ticket_scan_url)
+        self.assertNotContains(response, ticket_scan_url)
         self.assertNotIn("Content-Disposition", response)
 
 
@@ -753,6 +949,17 @@ class PublicEventActiveParticipantFlowTests(TestCase):
             first_name="Public Role User Two",
             email="public-role-user-two@example.com",
         )
+
+    def test_public_event_form_shows_dynamic_multiple_ticket_type_section(self):
+        self.client.force_login(self.organizer)
+
+        response = self.client.get(reverse("new_event") + "?event_type=public")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Do you want to create multiple ticket types?")
+        self.assertContains(response, "How many ticket types do you want to create?")
+        self.assertContains(response, 'name="multiTicketMode"')
+        self.assertContains(response, 'data-ticket-type-count')
 
     def test_organizer_can_set_active_participant_requirement_for_public_event(self):
         self.client.force_login(self.organizer)
@@ -1020,6 +1227,231 @@ class PublicEventActiveParticipantFlowTests(TestCase):
         self.assertEqual(second_booking.helper_activity_slot_id, slot_backstage.id)
 
 
+class PaymentFlowTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="payment-user@example.com",
+            password="secret123",
+            first_name="Payment User",
+            email="payment-user@example.com",
+        )
+        self.organizer = User.objects.create_user(
+            username="payment-organizer@example.com",
+            password="secret123",
+            first_name="Payment Organizer",
+            email="payment-organizer@example.com",
+        )
+        organizer_profile = self.organizer.profile
+        organizer_profile.role = Profile.ROLE_ORGANIZER
+        organizer_profile.contact = self.organizer.username
+        organizer_profile.save(update_fields=["role", "contact"])
+
+        self.event = Event.objects.create(
+            title="Payment Feature Event",
+            category="Workshop",
+            location="Delhi",
+            date=timezone.localdate(),
+            time="10:00 AM - 12:00 PM",
+            price=500,
+            description="Payment feature test event.",
+            organizer_name="Payment Organizer",
+            organizer_phone="+91 9999999999",
+            organizer_email="payment-organizer@example.com",
+            created_by=self.organizer,
+        )
+
+    def test_payment_submit_creates_transaction_reference(self):
+        booking = Booking.objects.create(
+            user=self.user,
+            event=self.event,
+            tickets=1,
+            attendee_name="Payment User",
+            total_amount=500,
+            payment_status=Booking.PAYMENT_UNPAID,
+            status=Booking.STATUS_PENDING,
+        )
+
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("payment_pay", args=[booking.id]),
+            data={"method": "UPI", "upiId": "payer@upi"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("booking_success", args=[booking.id]))
+        payment = Payment.objects.get(booking=booking)
+        self.assertEqual(payment.status, Payment.STATUS_PAID)
+        self.assertTrue(bool(payment.transaction_ref))
+        self.assertEqual(payment.upi_id, "payer@upi")
+        self.assertEqual(payment.payment_meta.get("upi_id"), "payer@upi")
+
+    @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+    def test_payment_submit_applies_promo_and_emails_ticket(self):
+        promo = PromoCode.objects.create(
+            code="WELCOME10",
+            description="10 percent off",
+            discount_type=PromoCode.DISCOUNT_PERCENTAGE,
+            discount_value=10,
+            active=True,
+            expires_at=timezone.now() + timedelta(days=7),
+        )
+        booking = Booking.objects.create(
+            user=self.user,
+            event=self.event,
+            tickets=1,
+            attendee_name="Payment User",
+            total_amount=500,
+            payment_status=Booking.PAYMENT_UNPAID,
+            status=Booking.STATUS_PENDING,
+        )
+
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("payment_pay", args=[booking.id]),
+            data={
+                "method": "Wallet",
+                "promoCode": promo.code,
+                "walletProvider": "Paytm",
+                "walletMobile": "9876543210",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        booking.refresh_from_db()
+        promo.refresh_from_db()
+        payment = Payment.objects.get(booking=booking, status=Payment.STATUS_PAID)
+        self.assertEqual(payment.amount, 450)
+        self.assertEqual(payment.method, "Wallet")
+        self.assertEqual(payment.coupon_code, "WELCOME10")
+        self.assertEqual(payment.discount_amount, 50)
+        self.assertEqual(payment.payment_meta.get("wallet_provider"), "Paytm")
+        self.assertEqual(payment.payment_meta.get("wallet_mobile_last4"), "3210")
+        self.assertEqual(booking.total_amount, 450)
+        self.assertEqual(promo.used_count, 1)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["payment-user@example.com"])
+        self.assertTrue(any(att.filename.endswith(".pdf") for att in mail.outbox[0].attachments))
+
+    def test_card_payment_requires_card_details_and_stores_masked_values(self):
+        booking = Booking.objects.create(
+            user=self.user,
+            event=self.event,
+            tickets=1,
+            attendee_name="Payment User",
+            total_amount=500,
+            payment_status=Booking.PAYMENT_UNPAID,
+            status=Booking.STATUS_PENDING,
+        )
+
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("payment_pay", args=[booking.id]),
+            data={
+                "method": "Card",
+                "cardHolderName": "Payment User",
+                "cardNumber": "4242 4242 4242 4242",
+                "cardExpiry": "12/30",
+                "cardCvv": "123",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        payment = Payment.objects.get(booking=booking, status=Payment.STATUS_PAID)
+        self.assertEqual(payment.method, "Card")
+        self.assertEqual(payment.payment_meta.get("card_holder_name"), "Payment User")
+        self.assertEqual(payment.payment_meta.get("card_last4"), "4242")
+        self.assertEqual(payment.payment_meta.get("card_expiry"), "12/30")
+
+    def test_card_payment_without_cvv_is_rejected(self):
+        booking = Booking.objects.create(
+            user=self.user,
+            event=self.event,
+            tickets=1,
+            attendee_name="Payment User",
+            total_amount=500,
+            payment_status=Booking.PAYMENT_UNPAID,
+            status=Booking.STATUS_PENDING,
+        )
+
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("payment_pay", args=[booking.id]),
+            data={
+                "method": "Card",
+                "cardHolderName": "Payment User",
+                "cardNumber": "4242 4242 4242 4242",
+                "cardExpiry": "12/30",
+                "cardCvv": "",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Payment.objects.filter(booking=booking, status=Payment.STATUS_PAID).exists())
+        feedback = [message.message for message in get_messages(response.wsgi_request)]
+        self.assertTrue(any("Please fill all card details." in message for message in feedback))
+
+    def test_cancel_paid_booking_creates_refund_record(self):
+        booking = Booking.objects.create(
+            user=self.user,
+            event=self.event,
+            tickets=1,
+            attendee_name="Payment User",
+            total_amount=500,
+            payment_status=Booking.PAYMENT_PAID,
+            status=Booking.STATUS_CONFIRMED,
+            invoice_no="INV-PAY-001",
+        )
+        Payment.objects.create(
+            booking=booking,
+            amount=500,
+            method="UPI",
+            status=Payment.STATUS_PAID,
+            transaction_ref="PAY-TEST-001",
+            upi_id="payer@upi",
+            gateway_provider="Eventify Local Gateway",
+            gateway_payment_id="UPI-TEST-001",
+        )
+
+        self.client.force_login(self.user)
+        response = self.client.post(reverse("cancel_booking", args=[booking.id]))
+
+        self.assertEqual(response.status_code, 302)
+        booking.refresh_from_db()
+        self.assertEqual(booking.status, Booking.STATUS_CANCELLED)
+        self.assertEqual(booking.payment_status, Booking.PAYMENT_REFUNDED)
+        refund_payment = Payment.objects.filter(booking=booking, status=Payment.STATUS_REFUNDED).first()
+        self.assertIsNotNone(refund_payment)
+        self.assertEqual(refund_payment.amount, 250)
+        self.assertTrue((refund_payment.transaction_ref or "").startswith("RFD-"))
+
+    def test_cancelled_booking_can_be_booked_again(self):
+        Booking.objects.create(
+            user=self.user,
+            event=self.event,
+            tickets=1,
+            attendee_name="Payment User",
+            total_amount=500,
+            payment_status=Booking.PAYMENT_REFUNDED,
+            status=Booking.STATUS_CANCELLED,
+            invoice_no="INV-PAY-002",
+        )
+
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("book_event", args=[self.event.id]),
+            data={"attendeeName": "Payment User"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Booking.objects.filter(user=self.user, event=self.event).count(), 2)
+        latest_booking = Booking.objects.filter(user=self.user, event=self.event).order_by("-booking_date", "-id").first()
+        self.assertIsNotNone(latest_booking)
+        self.assertEqual(latest_booking.status, Booking.STATUS_PENDING)
+        self.assertEqual(latest_booking.payment_status, Booking.PAYMENT_UNPAID)
+        self.assertEqual(response.url, reverse("payment_page", args=[latest_booking.id]))
+
+
 class PrivateEventInvitationEmailTests(TestCase):
     def setUp(self):
         self.organizer = User.objects.create_user(
@@ -1117,7 +1549,7 @@ class PrivateEventInvitationEmailTests(TestCase):
 
         pay_response = self.client.post(
             reverse("private_event_payment_pay", args=[payment.id]),
-            data={"method": "UPI"},
+            data={"method": "UPI", "upiId": "organizer@upi"},
         )
 
         self.assertEqual(pay_response.status_code, 302)
@@ -1128,6 +1560,37 @@ class PrivateEventInvitationEmailTests(TestCase):
         self.assertEqual(len(mail.outbox), 2)
         self.assertEqual(mail.outbox[0].to, ["paid1@example.com"])
         self.assertEqual(mail.outbox[1].to, ["paid2@example.com"])
+
+    def test_my_events_shows_private_event_payment_action(self):
+        event = Event.objects.create(
+            title="Private Panel Event",
+            category="Seminar",
+            location="Delhi",
+            date=timezone.localdate(),
+            time="10:00 AM - 12:00 PM",
+            price=20,
+            description="Private organizer event",
+            organizer_name="Invite Organizer",
+            organizer_phone="+91 9999999999",
+            organizer_email="private-invite-organizer@example.com",
+            created_by=self.organizer,
+            is_private=True,
+            guest_emails="guest1@example.com, guest2@example.com",
+        )
+        payment = PrivateEventPayment.objects.create(
+            organizer=self.organizer,
+            event=event,
+            guest_count=2,
+            amount=20,
+            status=PrivateEventPayment.STATUS_PENDING,
+        )
+
+        self.client.force_login(self.organizer)
+        response = self.client.get(reverse("my_events"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pay Private")
+        self.assertContains(response, reverse("private_event_payment_page", args=[payment.id]))
 
 
 class DeleteAccountViewTests(TestCase):
@@ -1355,3 +1818,488 @@ class ProfileUsernameEditTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("editable-user@example.com", mail.outbox[0].to)
+
+
+class TwoFactorAuthFlowTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="twofa-user@example.com",
+            password="secret123",
+            first_name="Two Factor User",
+            email="twofa-user@example.com",
+        )
+        self.profile = self.user.profile
+
+    def test_login_with_2fa_requires_backup_code(self):
+        self.profile.two_factor_enabled = True
+        self.profile.two_factor_backup_codes = ["ABCD1234"]
+        self.profile.save(update_fields=["two_factor_enabled", "two_factor_backup_codes"])
+
+        response = self.client.post(
+            reverse("login_submit"),
+            data={
+                "role": Profile.ROLE_USER,
+                "contact": "twofa-user@example.com",
+                "password": "secret123",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("verify_2fa"))
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+        verify_response = self.client.post(
+            reverse("verify_2fa"),
+            data={"code": "abcd1234"},
+        )
+
+        self.assertEqual(verify_response.status_code, 302)
+        self.assertEqual(verify_response.url, reverse("dashboard"))
+        self.assertEqual(self.client.session.get("_auth_user_id"), str(self.user.id))
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.two_factor_backup_codes, [])
+
+    def test_setup_2fa_generates_secret_and_enables_with_totp_code(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("setup_2fa"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Scan the QR code")
+        self.profile.refresh_from_db()
+        self.assertTrue(self.profile.two_factor_secret)
+        self.assertTrue(self.profile.two_factor_backup_codes)
+
+        enable_response = self.client.post(
+            reverse("enable_2fa"),
+            data={"code": generate_totp_code(self.profile.two_factor_secret)},
+        )
+
+        self.assertEqual(enable_response.status_code, 302)
+        self.assertEqual(enable_response.url, reverse("settings"))
+        self.profile.refresh_from_db()
+        self.assertTrue(self.profile.two_factor_enabled)
+
+    def test_login_with_2fa_accepts_totp_code(self):
+        self.profile.two_factor_secret = "JBSWY3DPEHPK3PXP"
+        self.profile.two_factor_enabled = True
+        self.profile.two_factor_backup_codes = ["ABCD1234"]
+        self.profile.save(update_fields=["two_factor_secret", "two_factor_enabled", "two_factor_backup_codes"])
+
+        response = self.client.post(
+            reverse("login_submit"),
+            data={
+                "role": Profile.ROLE_USER,
+                "contact": "twofa-user@example.com",
+                "password": "secret123",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("verify_2fa"))
+
+        verify_response = self.client.post(
+            reverse("verify_2fa"),
+            data={"code": generate_totp_code(self.profile.two_factor_secret)},
+        )
+
+        self.assertEqual(verify_response.status_code, 302)
+        self.assertEqual(verify_response.url, reverse("dashboard"))
+        self.assertEqual(self.client.session.get("_auth_user_id"), str(self.user.id))
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.two_factor_backup_codes, ["ABCD1234"])
+
+
+class SocialOAuthFlowTests(TestCase):
+    def setUp(self):
+        self.existing_user = User.objects.create_user(
+            username="oauth-existing@example.com",
+            password="secret123",
+            first_name="Existing",
+            email="oauth-existing@example.com",
+        )
+        self.existing_profile = self.existing_user.profile
+
+    @override_settings(GOOGLE_OAUTH_CLIENT_ID="google-client", GOOGLE_OAUTH_CLIENT_SECRET="google-secret")
+    @mock.patch("core.views.fetch_google_profile")
+    @mock.patch("core.views.exchange_google_code")
+    def test_google_oauth_callback_creates_account_and_logs_in(self, mock_exchange_code, mock_fetch_profile):
+        mock_exchange_code.return_value = {"access_token": "google-access-token"}
+        mock_fetch_profile.return_value = {
+            "sub": "google-user-123",
+            "email": "google-new@example.com",
+            "given_name": "Google",
+            "family_name": "User",
+        }
+        session = self.client.session
+        session["oauth_google_state"] = "google-state"
+        session.save()
+
+        response = self.client.get(
+            reverse("social_login_google"),
+            {"code": "auth-code", "state": "google-state"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("dashboard"))
+        created_user = User.objects.get(email="google-new@example.com")
+        self.assertEqual(self.client.session.get("_auth_user_id"), str(created_user.id))
+        created_profile = created_user.profile
+        self.assertEqual(created_profile.google_id, "google-user-123")
+        self.assertTrue(created_profile.email_verified)
+
+    @override_settings(
+        GOOGLE_OAUTH_CLIENT_ID="google-client",
+        GOOGLE_OAUTH_CLIENT_SECRET="google-secret",
+        GOOGLE_OAUTH_REDIRECT_URI="http://127.0.0.1:8000/auth/social/google/",
+    )
+    @mock.patch("core.views.build_google_auth_url")
+    def test_google_oauth_start_uses_configured_redirect_uri(self, mock_build_auth_url):
+        mock_build_auth_url.return_value = "/google/oauth/start/"
+
+        response = self.client.get(reverse("social_login_google"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, "/google/oauth/start/")
+        args, _ = mock_build_auth_url.call_args
+        self.assertEqual(args[0], "http://127.0.0.1:8000/auth/social/google/")
+        self.assertTrue(args[1])
+
+    @override_settings(
+        GITHUB_OAUTH_CLIENT_ID="github-client",
+        GITHUB_OAUTH_CLIENT_SECRET="github-secret",
+        GITHUB_OAUTH_REDIRECT_URI="http://localhost:8000/auth/social/github/",
+    )
+    @mock.patch("core.views.build_github_auth_url")
+    def test_github_oauth_start_uses_configured_redirect_uri(self, mock_build_auth_url):
+        mock_build_auth_url.return_value = "/github/oauth/start/"
+
+        response = self.client.get(reverse("social_login_github"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, "/github/oauth/start/")
+        args, _ = mock_build_auth_url.call_args
+        self.assertEqual(args[0], "http://localhost:8000/auth/social/github/")
+        self.assertTrue(args[1])
+
+    @override_settings(GITHUB_OAUTH_CLIENT_ID="github-client", GITHUB_OAUTH_CLIENT_SECRET="github-secret")
+    @mock.patch("core.views.fetch_github_emails")
+    @mock.patch("core.views.fetch_github_profile")
+    @mock.patch("core.views.exchange_github_code")
+    def test_github_oauth_callback_links_existing_user(self, mock_exchange_code, mock_fetch_profile, mock_fetch_emails):
+        mock_exchange_code.return_value = {"access_token": "github-access-token"}
+        mock_fetch_profile.return_value = {
+            "id": 501,
+            "login": "existing-gh",
+            "name": "Existing User",
+            "email": None,
+        }
+        mock_fetch_emails.return_value = [
+            {"email": "oauth-existing@example.com", "verified": True, "primary": True},
+        ]
+        session = self.client.session
+        session["oauth_github_state"] = "github-state"
+        session.save()
+
+        response = self.client.get(
+            reverse("social_login_github"),
+            {"code": "auth-code", "state": "github-state"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("dashboard"))
+        self.assertEqual(self.client.session.get("_auth_user_id"), str(self.existing_user.id))
+        self.existing_profile.refresh_from_db()
+        self.assertEqual(self.existing_profile.github_id, "501")
+        self.assertTrue(self.existing_profile.email_verified)
+
+
+class RazorpayPaymentFlowTests(TestCase):
+    def setUp(self):
+        self.organizer = User.objects.create_user(
+            username="rzp-organizer@example.com",
+            password="secret123",
+            first_name="Rzp Organizer",
+            email="rzp-organizer@example.com",
+        )
+        organizer_profile = self.organizer.profile
+        organizer_profile.role = Profile.ROLE_ORGANIZER
+        organizer_profile.contact = self.organizer.username
+        organizer_profile.save(update_fields=["role", "contact"])
+
+        self.user = User.objects.create_user(
+            username="rzp-user@example.com",
+            password="secret123",
+            first_name="Rzp User",
+            email="rzp-user@example.com",
+        )
+
+        self.event = Event.objects.create(
+            title="Razorpay Event",
+            category="Music",
+            location="Mumbai",
+            date=timezone.localdate() + timedelta(days=7),
+            time="6:00 PM - 8:00 PM",
+            price=1200,
+            description="Razorpay booking event",
+            organizer_name="Rzp Organizer",
+            organizer_phone="+91 9000000000",
+            organizer_email="rzp-organizer@example.com",
+            created_by=self.organizer,
+        )
+        self.booking = Booking.objects.create(
+            user=self.user,
+            event=self.event,
+            attendee_name="Rzp User",
+            status=Booking.STATUS_PENDING,
+            payment_status=Booking.PAYMENT_UNPAID,
+            tickets=1,
+            total_amount=1200,
+        )
+        self.private_event = Event.objects.create(
+            title="Private Razorpay Event",
+            category="Corporate",
+            location="Noida",
+            date=timezone.localdate() + timedelta(days=14),
+            time="2:00 PM - 5:00 PM",
+            price=0,
+            description="Private event Razorpay flow",
+            is_private=True,
+            guest_emails="guest1@example.com,guest2@example.com",
+            organizer_name="Rzp Organizer",
+            organizer_phone="+91 9000000000",
+            organizer_email="rzp-organizer@example.com",
+            created_by=self.organizer,
+        )
+        self.private_payment = PrivateEventPayment.objects.create(
+            organizer=self.organizer,
+            event=self.private_event,
+            guest_count=2,
+            amount=20,
+        )
+
+    @override_settings(RAZORPAY_KEY_ID="rzp_test_key", RAZORPAY_KEY_SECRET="rzp_test_secret")
+    @mock.patch("core.views.create_razorpay_order")
+    def test_booking_payment_uses_razorpay_checkout_and_verification(self, mock_create_order):
+        mock_create_order.return_value = {"id": "order_booking_123"}
+        self.client.force_login(self.user)
+
+        checkout_response = self.client.post(reverse("payment_pay", args=[self.booking.id]), data={})
+
+        self.assertEqual(checkout_response.status_code, 200)
+        self.assertTemplateUsed(checkout_response, "core/razorpay_checkout.html")
+        context_token = checkout_response.context["context_token"]
+        signature = hmac.new(
+            b"rzp_test_secret",
+            b"order_booking_123|pay_booking_456",
+            hashlib.sha256,
+        ).hexdigest()
+
+        verify_response = self.client.post(
+            reverse("payment_verify", args=[self.booking.id]),
+            data={
+                "contextToken": context_token,
+                "razorpay_order_id": "order_booking_123",
+                "razorpay_payment_id": "pay_booking_456",
+                "razorpay_signature": signature,
+            },
+        )
+
+        self.assertEqual(verify_response.status_code, 302)
+        self.assertEqual(verify_response.url, reverse("booking_success", args=[self.booking.id]))
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.payment_status, Booking.PAYMENT_PAID)
+        payment = self.booking.payments.get(status=Payment.STATUS_PAID)
+        self.assertEqual(payment.gateway_provider, "Razorpay")
+        self.assertEqual(payment.gateway_payment_id, "pay_booking_456")
+
+    @override_settings(RAZORPAY_KEY_ID="rzp_test_key", RAZORPAY_KEY_SECRET="rzp_test_secret")
+    @mock.patch("core.views.send_private_event_invitation_emails", return_value=(2, 0))
+    @mock.patch("core.views.create_razorpay_order")
+    def test_private_event_payment_uses_razorpay_checkout_and_verification(
+        self,
+        mock_create_order,
+        mock_send_invites,
+    ):
+        mock_create_order.return_value = {"id": "order_private_123"}
+        self.client.force_login(self.organizer)
+
+        checkout_response = self.client.post(
+            reverse("private_event_payment_pay", args=[self.private_payment.id]),
+            data={},
+        )
+
+        self.assertEqual(checkout_response.status_code, 200)
+        self.assertTemplateUsed(checkout_response, "core/razorpay_checkout.html")
+        context_token = checkout_response.context["context_token"]
+        signature = hmac.new(
+            b"rzp_test_secret",
+            b"order_private_123|pay_private_456",
+            hashlib.sha256,
+        ).hexdigest()
+
+        verify_response = self.client.post(
+            reverse("private_event_payment_verify", args=[self.private_payment.id]),
+            data={
+                "contextToken": context_token,
+                "razorpay_order_id": "order_private_123",
+                "razorpay_payment_id": "pay_private_456",
+                "razorpay_signature": signature,
+            },
+        )
+
+        self.assertEqual(verify_response.status_code, 302)
+        self.assertEqual(verify_response.url, reverse("my_events"))
+        self.private_payment.refresh_from_db()
+        self.assertEqual(self.private_payment.status, PrivateEventPayment.STATUS_PAID)
+        self.assertEqual(self.private_payment.gateway_provider, "Razorpay")
+        self.assertEqual(self.private_payment.gateway_payment_id, "pay_private_456")
+        mock_send_invites.assert_called_once()
+
+
+class TicketTypeBookingFlowTests(TestCase):
+    def setUp(self):
+        self.organizer = User.objects.create_user(
+            username="ticket-organizer@example.com",
+            password="secret123",
+            first_name="Ticket Organizer",
+            email="ticket-organizer@example.com",
+        )
+        self.organizer.profile.role = Profile.ROLE_ORGANIZER
+        self.organizer.profile.save(update_fields=["role"])
+
+        self.user = User.objects.create_user(
+            username="ticket-user@example.com",
+            password="secret123",
+            first_name="Ticket User",
+            email="ticket-user@example.com",
+        )
+
+        self.event = Event.objects.create(
+            title="Ticket Type Event",
+            category="Music",
+            location="Delhi",
+            date=timezone.localdate() + timedelta(days=10),
+            time="10:00 AM - 12:00 PM",
+            price=1000,
+            description="Ticket type booking flow test event.",
+            organizer_name="Ticket Organizer",
+            organizer_phone="+91 9000000000",
+            organizer_email="ticket-organizer@example.com",
+            created_by=self.organizer,
+        )
+        self.ticket_type = TicketType.objects.create(
+            event=self.event,
+            name="VIP",
+            price=1500,
+            total_quantity=5,
+            available_quantity=5,
+            max_per_booking=5,
+            is_active=True,
+            display_order=0,
+        )
+
+    def test_ticket_type_quantity_deducts_on_payment_and_restores_on_cancel(self):
+        self.client.force_login(self.user)
+        book_response = self.client.post(
+            reverse("book_event", args=[self.event.id]),
+            data={
+                "attendeeName": "Ticket User",
+                "applicationRole": Booking.ROLE_ATTENDEE,
+                "ticketTypeId": str(self.ticket_type.id),
+                "ticketQuantity": "2",
+            },
+        )
+
+        self.assertEqual(book_response.status_code, 302)
+        booking = Booking.objects.get(user=self.user, event=self.event)
+        self.assertEqual(booking.ticket_type_id, self.ticket_type.id)
+        self.assertEqual(booking.tickets, 2)
+        self.assertEqual(booking.total_amount, 3000)
+
+        pay_response = self.client.post(
+            reverse("payment_pay", args=[booking.id]),
+            data={
+                "method": "UPI",
+                "upiId": "ticketuser@bank",
+            },
+        )
+
+        self.assertEqual(pay_response.status_code, 302)
+        booking.refresh_from_db()
+        self.ticket_type.refresh_from_db()
+        self.assertEqual(booking.payment_status, Booking.PAYMENT_PAID)
+        self.assertEqual(self.ticket_type.available_quantity, 3)
+
+        cancel_response = self.client.post(reverse("cancel_booking", args=[booking.id]))
+        self.assertEqual(cancel_response.status_code, 302)
+
+        booking.refresh_from_db()
+        self.ticket_type.refresh_from_db()
+        self.assertEqual(booking.status, Booking.STATUS_CANCELLED)
+        self.assertEqual(booking.payment_status, Booking.PAYMENT_REFUNDED)
+        self.assertEqual(self.ticket_type.available_quantity, 5)
+
+
+class TrendingApiAndReminderTests(TestCase):
+    def setUp(self):
+        self.organizer = User.objects.create_user(
+            username="trend-organizer@example.com",
+            password="secret123",
+            first_name="Trend Organizer",
+            email="trend-organizer@example.com",
+        )
+        self.organizer.profile.role = Profile.ROLE_ORGANIZER
+        self.organizer.profile.save(update_fields=["role"])
+
+        self.user = User.objects.create_user(
+            username="trend-user@example.com",
+            password="secret123",
+            first_name="Trend User",
+            email="trend-user@example.com",
+        )
+
+        self.event = Event.objects.create(
+            title="Trending Reminder Event",
+            category="Workshop",
+            location="Noida",
+            date=timezone.localdate() + timedelta(days=1),
+            time="11:00 AM - 01:00 PM",
+            price=800,
+            description="Event used for trending and reminder tests.",
+            organizer_name="Trend Organizer",
+            organizer_phone="+91 9888888888",
+            organizer_email="trend-organizer@example.com",
+            created_by=self.organizer,
+        )
+        self.booking = Booking.objects.create(
+            user=self.user,
+            event=self.event,
+            attendee_name="Trend User",
+            status=Booking.STATUS_CONFIRMED,
+            payment_status=Booking.PAYMENT_PAID,
+            tickets=1,
+            total_amount=800,
+        )
+        Payment.objects.create(
+            booking=self.booking,
+            amount=800,
+            method="UPI",
+            status=Payment.STATUS_PAID,
+            transaction_ref="PAY-TREND-001",
+        )
+
+    def test_trending_events_api_returns_data(self):
+        response = self.client.get(reverse("api_trending_events"))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        event_ids = [item["id"] for item in payload["events"]]
+        self.assertIn(self.event.id, event_ids)
+
+    def test_send_event_reminders_command_creates_notifications(self):
+        output = StringIO()
+        call_command("send_event_reminders", days=1, stdout=output)
+        self.assertTrue(
+            Notification.objects.filter(user=self.user, type="reminder").exists()
+        )

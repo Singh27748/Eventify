@@ -1,3 +1,9 @@
+"""
+Views - Website ke sabhi pages ke functions yahan hote hain.
+Har view ek specific page ke liye hai jaise home, dashboard, event detail, etc.
+Views data le kar template ko render karte hain jo HTML mein dikhega user ko.
+"""
+
 from datetime import datetime, timedelta
 import hashlib
 from html import escape
@@ -5,10 +11,12 @@ from io import BytesIO
 import mimetypes
 from pathlib import Path
 import re
+import secrets
 import socket
 
 from django.conf import settings
 from django.contrib import messages
+from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.core.mail import EmailMessage
@@ -23,37 +31,85 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.core import signing
 from django.core.signing import BadSignature, SignatureExpired
+from django.utils.html import strip_tags
 from django.utils.text import slugify
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from PIL import Image as PILImage, ImageDraw, ImageFont, ImageOps
 
-from .decorators import role_required
+from .decorators import role_required, admin_required
+from .integrations import (
+    IntegrationError,
+    build_github_auth_url,
+    build_google_auth_url,
+    create_razorpay_order,
+    exchange_github_code,
+    exchange_google_code,
+    fetch_github_emails,
+    fetch_github_profile,
+    fetch_google_profile,
+    generate_oauth_state,
+    get_github_oauth_config,
+    get_google_oauth_config,
+    oauth_provider_ready,
+    razorpay_ready,
+    verify_razorpay_signature,
+)
 from .models import (
     Booking,
     Event,
     EventActivitySlot,
+    EventCategory,
     EventHelperSlot,
+    EventGallery,
+    EventSchedule,
     Notification,
     OTPRequest,
     Payment,
     PrivateEventPayment,
     Profile,
+    PromoCode,
+    SecurityAuditLog,
     SupportTicket,
+    TicketType,
 )
 from .services import (
     create_notification,
     generate_invoice_no,
     generate_otp,
+    get_trending_events,
     menu_by_role,
     normalize_language,
     seed_demo_data,
     ui_labels,
 )
+from .security import (
+    build_qr_code_data_uri,
+    build_totp_uri,
+    generate_backup_codes,
+    generate_totp_secret,
+    verify_totp_code,
+)
+from .security_controls import (
+    clear_failed_logins,
+    format_lockout_message,
+    get_login_lockout,
+    initialize_secure_session,
+    record_audit_log,
+    record_failed_login,
+    sanitize_text_input,
+    validate_user_password,
+)
 
+# Global variables for demo data seeding
 _seed_checked = False
-PRIVATE_EVENT_EMAIL_FEE = 10
+PRIVATE_EVENT_EMAIL_FEE = 10  # Private event ke liye per guest fee
+NEWSLETTER_CONTACT_RECIPIENTS = (  # Newsletter subscribe hone par email yahan jayega
+    "vishwakarmaayush3884@gmail.com",
+    "2023bca136@axiscolleges.in",
+    "asing27748@gmail.com",
+)
 
 
 def ensure_seeded():
@@ -78,19 +134,211 @@ def get_or_create_profile(user):
     return profile
 
 
-def validate_event_image(uploaded_image):
+def clear_pending_2fa_session(request):
+    request.session.pop("2fa_user_id", None)
+    request.session.pop("2fa_expected_role", None)
+    request.session.pop("2fa_auth_source", None)
+
+
+def begin_second_factor_challenge(request, user, profile, auth_source="password"):
+    request.session["2fa_user_id"] = user.id
+    request.session["2fa_expected_role"] = profile.role
+    request.session["2fa_auth_source"] = (auth_source or "password").strip()
+
+
+def complete_login_after_primary_auth(request, user, profile, info_message=None, auth_source="password"):
+    if profile.two_factor_enabled:
+        begin_second_factor_challenge(request, user, profile, auth_source=auth_source)
+        messages.info(
+            request,
+            "Two-factor code required. Enter your authenticator app code or a backup code to continue.",
+        )
+        return redirect("verify_2fa")
+
+    clear_pending_2fa_session(request)
+    login(request, user)
+    initialize_secure_session(request)
+    record_audit_log(
+        action="login_success",
+        summary=f"Successful {auth_source} login.",
+        category="auth",
+        status="success",
+        request=request,
+        user=user,
+        metadata={"auth_source": auth_source, "role": profile.role},
+    )
+    if info_message:
+        messages.info(request, info_message)
+    elif user.email and not profile.email_verified:
+        messages.warning(request, "Login successful. Please verify your email from Settings.")
+    messages.success(request, "Login successful.")
+    return redirect("dashboard")
+
+
+def show_password_validation_error(request, password, *, user=None, redirect_name):
+    try:
+        validate_user_password(password, user=user)
+    except ValidationError as exc:
+        messages.error(request, " ".join(exc.messages))
+        return redirect(redirect_name)
+    return None
+
+
+def ensure_totp_setup_material(profile):
+    update_fields = []
+    if not profile.two_factor_secret:
+        profile.two_factor_secret = generate_totp_secret()
+        update_fields.append("two_factor_secret")
+    if not profile.two_factor_backup_codes:
+        profile.two_factor_backup_codes = generate_backup_codes()
+        update_fields.append("two_factor_backup_codes")
+    if update_fields:
+        profile.save(update_fields=update_fields)
+    return profile
+
+
+def build_2fa_setup_context(request, profile):
+    ensure_totp_setup_material(profile)
+    account_name = (request.user.email or request.user.username or "user").strip()
+    otpauth_uri = build_totp_uri(profile.two_factor_secret, account_name)
+    return {
+        "secret": profile.two_factor_secret,
+        "backup_codes": list(profile.two_factor_backup_codes or []),
+        "otpauth_uri": otpauth_uri,
+        "qr_code_data_uri": build_qr_code_data_uri(otpauth_uri),
+    }
+
+
+def _oauth_state_key(provider_slug):
+    return f"oauth_{provider_slug}_state"
+
+
+def _oauth_redirect_uri(request, url_name, setting_name):
+    configured_uri = (getattr(settings, setting_name, "") or "").strip()
+    if configured_uri:
+        return configured_uri
+    return request.build_absolute_uri(reverse(url_name))
+
+
+def _render_social_login_setup_page(request, provider_name, setup_required=True, error_message=""):
+    return render(
+        request,
+        "core/social_login.html",
+        {
+            "provider": provider_name,
+            "setup_required": setup_required,
+            "error_message": error_message,
+        },
+    )
+
+
+def sync_social_user(provider_slug, provider_user_id, email, first_name="", last_name=""):
+    normalized_provider_id = str(provider_user_id or "").strip()
+    normalized_email = (email or "").strip().lower()
+    if not normalized_provider_id:
+        raise ValidationError("Provider user id is missing.")
+    if not normalized_email or "@" not in normalized_email:
+        raise ValidationError("A verified email address is required for social login.")
+
+    provider_field = "google_id" if provider_slug == "google" else "github_id"
+    profile = (
+        Profile.objects.select_related("user")
+        .filter(**{provider_field: normalized_provider_id})
+        .first()
+    )
+    created = False
+
+    if profile:
+        user = profile.user
+    else:
+        user = User.objects.filter(email__iexact=normalized_email).order_by("id").first()
+        if not user:
+            username = build_unique_auth_username(normalized_email, Profile.ROLE_USER)
+            user = User.objects.create_user(
+                username=username,
+                email=normalized_email,
+                password=secrets.token_urlsafe(24),
+                first_name=(first_name or normalized_email.split("@")[0])[:150],
+                last_name=(last_name or "")[:150],
+            )
+            created = True
+        profile = get_or_create_profile(user)
+
+    user_updates = []
+    if normalized_email and user.email != normalized_email:
+        user.email = normalized_email
+        user_updates.append("email")
+    if first_name and user.first_name != first_name[:150]:
+        user.first_name = first_name[:150]
+        user_updates.append("first_name")
+    if last_name and user.last_name != last_name[:150]:
+        user.last_name = last_name[:150]
+        user_updates.append("last_name")
+    if user_updates:
+        user.save(update_fields=user_updates)
+
+    profile_updates = []
+    if getattr(profile, provider_field) != normalized_provider_id:
+        setattr(profile, provider_field, normalized_provider_id)
+        profile_updates.append(provider_field)
+    if created or not profile.contact or profile.contact == user.username:
+        profile.contact = normalized_email
+        profile_updates.append("contact")
+    if not profile.email_verified:
+        profile.email_verified = True
+        profile_updates.append("email_verified")
+    if profile_updates:
+        profile.save(update_fields=profile_updates)
+
+    if created:
+        create_notification(
+            user,
+            "Welcome to Eventify",
+            f"Your account has been created via {provider_slug.title()} login.",
+            "system",
+        )
+
+    return user, profile, created
+
+
+def validate_image_upload(uploaded_image, *, label, max_size_bytes):
     if not uploaded_image:
         return None
 
     ext = Path(uploaded_image.name).suffix.lower()
     allowed_exts = {".jpg", ".jpeg", ".png", ".webp"}
     if ext not in allowed_exts:
-        return "Only JPG, JPEG, PNG, or WEBP image is allowed."
+        return f"Only JPG, JPEG, PNG, or WEBP {label.lower()} files are allowed."
 
-    if uploaded_image.size > 5 * 1024 * 1024:
-        return "Event image size must be less than 5MB."
+    content_type = (uploaded_image.content_type or "").lower()
+    allowed_content_types = {"image/jpeg", "image/png", "image/webp"}
+    if content_type and content_type not in allowed_content_types:
+        return f"{label} content type is invalid."
+
+    if uploaded_image.size > max_size_bytes:
+        return f"{label} size must be less than {max_size_bytes // (1024 * 1024)}MB."
+
+    try:
+        uploaded_image.seek(0)
+        with PILImage.open(uploaded_image) as image:
+            image.verify()
+        uploaded_image.seek(0)
+    except Exception:
+        try:
+            uploaded_image.seek(0)
+        except Exception:
+            pass
+        return f"{label} file is corrupted or unsupported."
 
     return None
+
+
+def validate_event_image(uploaded_image):
+    return validate_image_upload(
+        uploaded_image,
+        label="Event image",
+        max_size_bytes=5 * 1024 * 1024,
+    )
 
 
 def parse_required_count(raw_value):
@@ -101,6 +349,579 @@ def parse_required_count(raw_value):
     if count < 0:
         return None
     return count
+
+
+def parse_positive_int(raw_value, minimum=0):
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < minimum:
+        return None
+    return parsed
+
+
+def parse_ticket_sales_datetime(raw_value):
+    value = (raw_value or "").strip()
+    if not value:
+        return None, ""
+    try:
+        naive_value = datetime.strptime(value, "%Y-%m-%dT%H:%M")
+    except ValueError:
+        return None, "Invalid ticket sale date/time format."
+    return timezone.make_aware(naive_value, timezone.get_current_timezone()), ""
+
+
+def default_ticket_type_payloads(base_price):
+    base = max(0, int(base_price or 0))
+    vip_price = max(base + max(200, base // 2), base)
+    early_bird_price = max(0, base - max(100, base // 5))
+    return [
+        {
+            "id": None,
+            "name": "VIP",
+            "price": vip_price,
+            "total_quantity": 50,
+            "max_per_booking": 4,
+            "sales_start": None,
+            "sales_end": None,
+            "display_order": 0,
+        },
+        {
+            "id": None,
+            "name": "Regular",
+            "price": base,
+            "total_quantity": 200,
+            "max_per_booking": 8,
+            "sales_start": None,
+            "sales_end": None,
+            "display_order": 1,
+        },
+        {
+            "id": None,
+            "name": "Early Bird",
+            "price": early_bird_price,
+            "total_quantity": 100,
+            "max_per_booking": 6,
+            "sales_start": None,
+            "sales_end": None,
+            "display_order": 2,
+        },
+    ]
+
+
+def default_single_ticket_type_payload(base_price):
+    base = max(0, int(base_price or 0))
+    return [
+        {
+            "id": None,
+            "name": "Regular",
+            "price": base,
+            "total_quantity": 200,
+            "max_per_booking": 8,
+            "sales_start": None,
+            "sales_end": None,
+            "display_order": 0,
+            "is_active": True,
+        }
+    ]
+
+
+def build_ticket_type_form_rows(event=None, fallback_price=0):
+    if event:
+        existing_rows = list(
+            event.ticket_types.order_by("display_order", "price", "id").values(
+                "id",
+                "name",
+                "price",
+                "total_quantity",
+                "available_quantity",
+                "max_per_booking",
+                "sales_start",
+                "sales_end",
+                "is_active",
+            )
+        )
+        if existing_rows:
+            return existing_rows
+    return default_ticket_type_payloads(fallback_price)
+
+
+def parse_ticket_types_from_post(request):
+    ticket_ids = request.POST.getlist("ticketTypeId[]") or request.POST.getlist("ticketTypeId")
+    names = request.POST.getlist("ticketTypeName[]") or request.POST.getlist("ticketTypeName")
+    prices = request.POST.getlist("ticketTypePrice[]") or request.POST.getlist("ticketTypePrice")
+    quantities = request.POST.getlist("ticketTypeQuantity[]") or request.POST.getlist("ticketTypeQuantity")
+    max_per_booking_values = (
+        request.POST.getlist("ticketTypeMaxPerBooking[]")
+        or request.POST.getlist("ticketTypeMaxPerBooking")
+    )
+    sales_starts = request.POST.getlist("ticketTypeSalesStart[]") or request.POST.getlist("ticketTypeSalesStart")
+    sales_ends = request.POST.getlist("ticketTypeSalesEnd[]") or request.POST.getlist("ticketTypeSalesEnd")
+
+    if not any([ticket_ids, names, prices, quantities, max_per_booking_values, sales_starts, sales_ends]):
+        return [], ""
+
+    max_rows = max(
+        len(ticket_ids),
+        len(names),
+        len(prices),
+        len(quantities),
+        len(max_per_booking_values),
+        len(sales_starts),
+        len(sales_ends),
+    )
+
+    parsed_rows = []
+    for index in range(max_rows):
+        raw_id = (ticket_ids[index] if index < len(ticket_ids) else "").strip()
+        name = (names[index] if index < len(names) else "").strip()
+        raw_price = (prices[index] if index < len(prices) else "").strip()
+        raw_quantity = (quantities[index] if index < len(quantities) else "").strip()
+        raw_max_per_booking = (
+            max_per_booking_values[index] if index < len(max_per_booking_values) else ""
+        ).strip()
+        raw_sales_start = (sales_starts[index] if index < len(sales_starts) else "").strip()
+        raw_sales_end = (sales_ends[index] if index < len(sales_ends) else "").strip()
+
+        if not any([raw_id, name, raw_price, raw_quantity, raw_max_per_booking, raw_sales_start, raw_sales_end]):
+            continue
+
+        if not name:
+            return None, "Ticket type name is required."
+
+        price = parse_positive_int(raw_price, minimum=0)
+        if price is None:
+            return None, "Ticket type price must be a valid non-negative number."
+
+        total_quantity = parse_positive_int(raw_quantity, minimum=1)
+        if total_quantity is None:
+            return None, "Ticket quantity must be at least 1."
+
+        max_per_booking = parse_positive_int(raw_max_per_booking or "1", minimum=1)
+        if max_per_booking is None:
+            return None, "Max tickets per booking must be at least 1."
+        max_per_booking = min(max_per_booking, total_quantity)
+
+        sales_start, sales_start_error = parse_ticket_sales_datetime(raw_sales_start)
+        if sales_start_error:
+            return None, sales_start_error
+        sales_end, sales_end_error = parse_ticket_sales_datetime(raw_sales_end)
+        if sales_end_error:
+            return None, sales_end_error
+        if sales_start and sales_end and sales_end <= sales_start:
+            return None, "Ticket sale end time must be after sale start time."
+
+        ticket_type_id = None
+        if raw_id:
+            ticket_type_id = parse_positive_int(raw_id, minimum=1)
+            if ticket_type_id is None:
+                return None, "Invalid ticket type row received."
+
+        parsed_rows.append(
+            {
+                "id": ticket_type_id,
+                "name": name[:80],
+                "price": price,
+                "total_quantity": total_quantity,
+                "max_per_booking": max_per_booking,
+                "sales_start": sales_start,
+                "sales_end": sales_end,
+                "display_order": index,
+                "is_active": True,
+            }
+        )
+
+    if not parsed_rows:
+        return None, "Please add at least one ticket type."
+    return parsed_rows, ""
+
+
+def sync_event_ticket_types(event, ticket_rows):
+    existing_ticket_types = {item.id: item for item in event.ticket_types.all()}
+    retained_ids = set()
+
+    for payload in ticket_rows:
+        row_id = payload.get("id")
+        if row_id and row_id in existing_ticket_types:
+            ticket_type = existing_ticket_types[row_id]
+            sold_count = max(0, int(ticket_type.total_quantity or 0) - int(ticket_type.available_quantity or 0))
+            if payload["total_quantity"] < sold_count:
+                return (
+                    f"Ticket type '{ticket_type.name}' total quantity cannot be less than already sold count "
+                    f"({sold_count})."
+                )
+
+            ticket_type.name = payload["name"]
+            ticket_type.price = payload["price"]
+            ticket_type.total_quantity = payload["total_quantity"]
+            ticket_type.available_quantity = max(0, payload["total_quantity"] - sold_count)
+            ticket_type.max_per_booking = payload["max_per_booking"]
+            ticket_type.sales_start = payload["sales_start"]
+            ticket_type.sales_end = payload["sales_end"]
+            ticket_type.display_order = payload["display_order"]
+            ticket_type.is_active = payload["is_active"]
+            ticket_type.save(
+                update_fields=[
+                    "name",
+                    "price",
+                    "total_quantity",
+                    "available_quantity",
+                    "max_per_booking",
+                    "sales_start",
+                    "sales_end",
+                    "display_order",
+                    "is_active",
+                ]
+            )
+            retained_ids.add(ticket_type.id)
+            continue
+
+        created_ticket_type = TicketType.objects.create(
+            event=event,
+            name=payload["name"],
+            price=payload["price"],
+            total_quantity=payload["total_quantity"],
+            available_quantity=payload["total_quantity"],
+            max_per_booking=payload["max_per_booking"],
+            sales_start=payload["sales_start"],
+            sales_end=payload["sales_end"],
+            display_order=payload["display_order"],
+            is_active=payload["is_active"],
+        )
+        retained_ids.add(created_ticket_type.id)
+
+    for existing_id, existing_ticket_type in existing_ticket_types.items():
+        if existing_id in retained_ids:
+            continue
+        has_active_bookings = existing_ticket_type.bookings.exclude(status=Booking.STATUS_CANCELLED).exists()
+        if has_active_bookings:
+            existing_ticket_type.is_active = False
+            existing_ticket_type.save(update_fields=["is_active"])
+        else:
+            existing_ticket_type.delete()
+    return ""
+
+
+def get_bookable_ticket_types(event):
+    now = timezone.now()
+    available_types = []
+    for ticket_type in event.ticket_types.filter(is_active=True).order_by("display_order", "price", "id"):
+        if int(ticket_type.available_quantity or 0) <= 0:
+            continue
+        if ticket_type.sales_start and now < ticket_type.sales_start:
+            continue
+        if ticket_type.sales_end and now > ticket_type.sales_end:
+            continue
+        available_types.append(ticket_type)
+    return available_types
+
+
+def generate_payment_reference(prefix="PAY"):
+    stamp = timezone.localtime().strftime("%Y%m%d%H%M%S")
+    micro_suffix = timezone.localtime().microsecond % 100000
+    return f"{prefix}-{stamp}-{micro_suffix:05d}"
+
+
+PAYMENT_METHODS = ("UPI", "Card", "Net Banking", "Wallet")
+RAZORPAY_METHOD = "Razorpay"
+PAYMENT_CONTEXT_MAX_AGE = 15 * 60
+UPI_ID_PATTERN = re.compile(r"^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$")
+CARD_NUMBER_PATTERN = re.compile(r"^\d{12,19}$")
+CARD_CVV_PATTERN = re.compile(r"^\d{3,4}$")
+CARD_EXPIRY_PATTERN = re.compile(r"^(0[1-9]|1[0-2])\s*/\s*(\d{2}|\d{4})$")
+ACCOUNT_NUMBER_PATTERN = re.compile(r"^\d{8,18}$")
+MOBILE_NUMBER_PATTERN = re.compile(r"^\d{10,12}$")
+
+
+def get_gateway_payment_id(method):
+    method_code = slugify(method or "pay").replace("-", "").upper() or "PAY"
+    return generate_payment_reference(method_code)
+
+
+def sign_gateway_context(payload, salt):
+    return signing.dumps(payload, salt=salt)
+
+
+def load_gateway_context(token, salt, max_age=PAYMENT_CONTEXT_MAX_AGE):
+    return signing.loads(token, salt=salt, max_age=max_age)
+
+
+def is_valid_upi_id(value):
+    return bool(UPI_ID_PATTERN.match((value or "").strip()))
+
+
+def digits_only(value):
+    return re.sub(r"\D", "", (value or "").strip())
+
+
+def is_valid_card_number(value):
+    card_number = digits_only(value)
+    if not CARD_NUMBER_PATTERN.match(card_number):
+        return False
+
+    total = 0
+    reverse_digits = card_number[::-1]
+    for index, digit in enumerate(reverse_digits):
+        number = int(digit)
+        if index % 2 == 1:
+            number *= 2
+            if number > 9:
+                number -= 9
+        total += number
+    return total % 10 == 0
+
+
+def normalize_card_expiry(value):
+    raw = (value or "").strip()
+    match = CARD_EXPIRY_PATTERN.match(raw)
+    if not match:
+        return ""
+
+    month = int(match.group(1))
+    year = int(match.group(2))
+    if year < 100:
+        year += 2000
+    today = timezone.localdate()
+    if (year, month) < (today.year, today.month):
+        return ""
+    return f"{month:02d}/{str(year)[-2:]}"
+
+
+def mask_last4(value):
+    digits = digits_only(value)
+    if not digits:
+        return ""
+    return digits[-4:]
+
+
+def extract_payment_details(request, method):
+    if method == "UPI":
+        upi_id = (request.POST.get("upiId") or "").strip().lower()
+        if not upi_id:
+            return None, "Please enter your UPI ID."
+        if not is_valid_upi_id(upi_id):
+            return None, "Please enter a valid UPI ID (example: user@bank)."
+        return {
+            "upi_id": upi_id,
+            "payment_meta": {"upi_id": upi_id},
+        }, ""
+
+    if method == "Card":
+        card_holder_name = (request.POST.get("cardHolderName") or "").strip()
+        card_number = digits_only(request.POST.get("cardNumber"))
+        card_expiry = normalize_card_expiry(request.POST.get("cardExpiry"))
+        card_cvv = digits_only(request.POST.get("cardCvv"))
+        if not all([card_holder_name, card_number, card_expiry, card_cvv]):
+            return None, "Please fill all card details."
+        if not is_valid_card_number(card_number):
+            return None, "Please enter a valid card number."
+        if not CARD_CVV_PATTERN.match(card_cvv):
+            return None, "Please enter a valid CVV."
+        return {
+            "upi_id": "",
+            "payment_meta": {
+                "card_holder_name": card_holder_name,
+                "card_last4": card_number[-4:],
+                "card_expiry": card_expiry,
+            },
+        }, ""
+
+    if method == "Net Banking":
+        bank_name = (request.POST.get("bankName") or "").strip()
+        account_holder_name = (request.POST.get("accountHolderName") or "").strip()
+        account_number = digits_only(request.POST.get("accountNumber"))
+        if not all([bank_name, account_holder_name, account_number]):
+            return None, "Please fill all net banking details."
+        if not ACCOUNT_NUMBER_PATTERN.match(account_number):
+            return None, "Please enter a valid account number."
+        return {
+            "upi_id": "",
+            "payment_meta": {
+                "bank_name": bank_name,
+                "account_holder_name": account_holder_name,
+                "account_last4": account_number[-4:],
+            },
+        }, ""
+
+    if method == "Wallet":
+        wallet_provider = (request.POST.get("walletProvider") or "").strip()
+        wallet_mobile = digits_only(request.POST.get("walletMobile"))
+        if not all([wallet_provider, wallet_mobile]):
+            return None, "Please fill all wallet details."
+        if not MOBILE_NUMBER_PATTERN.match(wallet_mobile):
+            return None, "Please enter a valid wallet mobile number."
+        return {
+            "upi_id": "",
+            "payment_meta": {
+                "wallet_provider": wallet_provider,
+                "wallet_mobile_last4": wallet_mobile[-4:],
+            },
+        }, ""
+
+    return None, "Please select a valid payment method."
+
+
+def find_active_promo(code):
+    normalized_code = (code or "").strip().upper()
+    if not normalized_code:
+        return None
+    return PromoCode.objects.filter(code__iexact=normalized_code, active=True).first()
+
+
+def validate_promo_for_amount(code, amount):
+    normalized_code = (code or "").strip().upper()
+    if not normalized_code:
+        return None, 0, ""
+
+    promo = PromoCode.objects.filter(code__iexact=normalized_code).first()
+    if not promo:
+        return None, 0, "Promo code not found."
+    if not promo.can_use():
+        if promo.is_expired:
+            return None, 0, "Promo code has expired."
+        if promo.max_uses and promo.used_count >= promo.max_uses:
+            return None, 0, "Promo code usage limit reached."
+        return None, 0, "Promo code is inactive."
+
+    discount_amount = promo.calculate_discount(amount)
+    if discount_amount <= 0:
+        return None, 0, "Promo code is not valid for this amount."
+    return promo, discount_amount, ""
+
+
+def build_ticket_holder_name(user):
+    return (user.first_name or user.get_full_name().strip() or user.username or "Guest").strip()
+
+
+def build_placeholder_profile_image(holder_name):
+    avatar_size = 700
+    image = PILImage.new("RGB", (avatar_size, avatar_size), "#dbe6ff")
+    draw = ImageDraw.Draw(image)
+    initials = "".join(part[:1].upper() for part in holder_name.split()[:2] if part) or "EV"
+    radius = int(avatar_size * 0.44)
+    center = avatar_size // 2
+    draw.ellipse(
+        (center - radius, center - radius, center + radius, center + radius),
+        fill="#4a73d3",
+    )
+    font = _load_font(210, bold=True)
+    text_width = draw.textlength(initials, font=font)
+    text_height = 210
+    text_x = int((avatar_size - text_width) / 2)
+    text_y = int((avatar_size - text_height) / 2) - 12
+    draw.text((text_x, text_y), initials, fill="#ffffff", font=font)
+    return image
+
+
+def load_ticket_holder_photo(user):
+    profile = get_or_create_profile(user)
+    if profile.profile_image:
+        try:
+            with profile.profile_image.open("rb") as image_file:
+                user_photo = PILImage.open(image_file).convert("RGB")
+                user_photo.load()
+                return user_photo
+        except Exception:
+            pass
+    return build_placeholder_profile_image(build_ticket_holder_name(user))
+
+
+def send_booking_ticket_email(request, booking, payment):
+    recipient = (booking.user.email or "").strip()
+    if not recipient:
+        return False
+
+    holder_name = build_ticket_holder_name(booking.user)
+    user_photo = load_ticket_holder_photo(booking.user)
+    ticket_token = generate_ticket_token(booking)
+    scan_path = reverse("ticket_qr_scan", args=[ticket_token])
+    qr_url = f"{build_qr_base_url(request)}{scan_path}"
+    ticket_pdf = build_ticket_pdf(booking, holder_name, user_photo, qr_url)
+    payment_time = timezone.localtime(payment.paid_at).strftime("%d %b %Y, %I:%M %p") if payment.paid_at else "-"
+    body = "\n".join(
+        [
+            "Your payment was successful.",
+            "",
+            f"Event: {booking.event.title}",
+            f"Ticket ID: {booking.ticket_reference}",
+            f"Invoice No: {booking.invoice_no or '-'}",
+            f"Transaction ID: {payment.transaction_ref or '-'}",
+            f"Amount Paid: INR {int(payment.amount or 0):,}",
+            f"Payment Time: {payment_time}",
+            "",
+            "Your ticket PDF is attached with this email.",
+        ]
+    )
+    from_email = (
+        (getattr(settings, "DEFAULT_FROM_EMAIL", "") or "").strip()
+        or (getattr(settings, "EMAIL_HOST_USER", "") or "").strip()
+        or "webmaster@localhost"
+    )
+    try:
+        email = EmailMessage(
+            subject=f"Eventify Payment Confirmation | {booking.event.title}",
+            body=body,
+            from_email=from_email,
+            to=[recipient],
+        )
+        email.attach(f"{booking.ticket_reference}.pdf", ticket_pdf, "application/pdf")
+        email.send(fail_silently=False)
+        return True
+    except Exception:
+        return False
+
+
+def log_failed_payment(
+    booking,
+    method,
+    reason,
+    coupon_code="",
+    gateway_provider="Eventify Local Gateway",
+    gateway_payment_id="",
+    verification_signature="",
+    payment_meta=None,
+):
+    Payment.objects.create(
+        booking=booking,
+        amount=max(0, int(booking.total_amount or 0)),
+        method=(method or "Unknown")[:80],
+        status=Payment.STATUS_FAILED,
+        transaction_ref=generate_payment_reference("FAIL"),
+        gateway_provider=(gateway_provider or "Eventify Local Gateway")[:80],
+        gateway_payment_id=(gateway_payment_id or get_gateway_payment_id(method))[:120],
+        verification_signature=(verification_signature or "")[:180],
+        verification_status="invalid",
+        failure_reason=reason,
+        coupon_code=(coupon_code or "").strip().upper(),
+        payment_meta=payment_meta or {},
+    )
+    record_audit_log(
+        action="payment_failed",
+        summary=f"Payment failed for booking {booking.ticket_reference}.",
+        category="payment",
+        status="failure",
+        user=booking.user,
+        actor_contact=getattr(getattr(booking.user, "profile", None), "contact", booking.user.username),
+        metadata={
+            "booking_id": booking.id,
+            "event_id": booking.event_id,
+            "reason": reason,
+            "method": method,
+            "gateway_provider": gateway_provider,
+        },
+    )
+
+
+def calculate_refund_amount(booking):
+    latest_paid_payment = booking.payments.filter(status=Payment.STATUS_PAID).order_by("-paid_at", "-id").first()
+    if not latest_paid_payment:
+        return 0
+    amount_paid = int(latest_paid_payment.amount or 0)
+    days_left = (booking.event.date - timezone.localdate()).days if booking.event and booking.event.date else 0
+    if days_left >= 2:
+        return amount_paid
+    return max(0, amount_paid // 2)
 
 
 def build_active_activity_form_rows(event=None):
@@ -406,7 +1227,7 @@ def normalize_security_answer(raw_value):
 
 
 def save_security_question(request):
-    question = (request.POST.get("securityQuestion") or "").strip()
+    question = sanitize_text_input(request.POST.get("securityQuestion"), max_length=255)
     answer = normalize_security_answer(request.POST.get("securityAnswer"))
     if not question or not answer:
         messages.error(request, "Please enter both security question and answer.")
@@ -424,6 +1245,14 @@ def save_security_question(request):
     profile.security_question = question
     profile.security_answer_hash = make_password(answer)
     profile.save(update_fields=["security_question", "security_answer_hash"])
+    record_audit_log(
+        action="security_question_updated",
+        summary="Security question updated from settings.",
+        category="account",
+        status="success",
+        request=request,
+        user=request.user,
+    )
     messages.success(request, "Security question saved successfully.")
     return redirect("settings")
 
@@ -1031,6 +1860,7 @@ def build_ticket_pdf(booking, holder_name, user_photo, qr_url):
         ("Invoice No", booking.invoice_no or "-"),
         ("Holder", holder_name),
         ("Applied Role", booking.applied_role_label),
+        ("Ticket Type", booking.ticket_type.name if booking.ticket_type_id else "Standard"),
         ("Event", booking.event.title),
         ("Event Date", booking.event.date.strftime("%d %b %Y")),
         ("Event Time", booking.event.time),
@@ -1094,6 +1924,109 @@ def build_ticket_pdf(booking, holder_name, user_photo, qr_url):
     issued_text = f"Issued on {timezone.localtime().strftime('%d %b %Y, %I:%M %p')}"
     draw.text((content_x, page_height - 170), issued_text, fill="#6072a3", font=small_font)
     draw.text((content_x, page_height - 128), "Carry this ticket and ID proof at event entry.", fill="#6072a3", font=small_font)
+
+    output = BytesIO()
+    page.save(output, format="PDF", resolution=150.0)
+    output.seek(0)
+    return output.getvalue()
+
+
+def build_invoice_pdf(booking, payment_records):
+    page_width, page_height = 1240, 1754
+    page = PILImage.new("RGB", (page_width, page_height), "#f4f7ff")
+    draw = ImageDraw.Draw(page)
+
+    title_font = _load_font(50, bold=True)
+    section_font = _load_font(32, bold=True)
+    body_font = _load_font(27)
+    small_font = _load_font(23)
+
+    draw.rounded_rectangle((60, 70, page_width - 60, page_height - 70), radius=36, fill="#ffffff", outline="#d6e0f8", width=3)
+    draw.rounded_rectangle((60, 70, page_width - 60, 240), radius=36, fill="#1d4eb8")
+    draw.text((96, 118), "EVENTIFY INVOICE", fill="#ffffff", font=title_font)
+
+    latest_paid_payment = next((item for item in payment_records if item.status == Payment.STATUS_PAID), None)
+    latest_refund_payment = next((item for item in payment_records if item.status == Payment.STATUS_REFUNDED), None)
+    details = [
+        ("Invoice No", booking.invoice_no or "-"),
+        ("Booking ID", f"#{booking.id}"),
+        ("Ticket ID", booking.ticket_reference),
+        ("Customer", build_ticket_holder_name(booking.user)),
+        ("Event", booking.event.title),
+        ("Event Date", booking.event.date.strftime("%d %b %Y")),
+        ("Location", booking.event.location),
+        ("Ticket Type", booking.ticket_type.name if booking.ticket_type_id else "Standard"),
+        ("Tickets", str(booking.tickets)),
+        ("Payment Status", booking.payment_status.title()),
+        ("Amount Paid", f"INR {int((latest_paid_payment.amount if latest_paid_payment else booking.total_amount) or 0):,}"),
+        (
+            "Discount",
+            f"INR {int((latest_paid_payment.discount_amount if latest_paid_payment else 0) or 0):,}",
+        ),
+        (
+            "Promo Code",
+            (latest_paid_payment.coupon_code if latest_paid_payment else "") or "-",
+        ),
+        (
+            "Refund Amount",
+            f"INR {int((latest_refund_payment.amount if latest_refund_payment else 0) or 0):,}",
+        ),
+        ("Issued On", timezone.localtime().strftime("%d %b %Y, %I:%M %p")),
+    ]
+
+    draw.text((96, 300), "Payment Receipt", fill="#244b9d", font=section_font)
+    row_y = 360
+    label_width = 220
+    value_width = page_width - 190 - label_width
+    for label, value in details:
+        draw.text((96, row_y), f"{label}:", fill="#2d4988", font=body_font)
+        wrapped = _wrap_text(draw, str(value or "-"), body_font, value_width)
+        for idx, line in enumerate(wrapped):
+            draw.text((96 + label_width, row_y + (idx * 36)), line, fill="#1f2a44", font=body_font)
+        row_height = max(50, 36 * len(wrapped))
+        row_y += row_height
+        draw.line((96, row_y, page_width - 96, row_y), fill="#e2e8f8", width=2)
+        row_y += 16
+
+    payment_section_top = min(page_height - 440, row_y + 16)
+    draw.text((96, payment_section_top), "Transactions", fill="#244b9d", font=section_font)
+    payment_row_y = payment_section_top + 58
+    if payment_records:
+        for payment in payment_records[:8]:
+            reference_time = payment.refunded_at if payment.status == Payment.STATUS_REFUNDED and payment.refunded_at else payment.paid_at
+            formatted_time = timezone.localtime(reference_time).strftime("%d %b %Y, %I:%M %p") if reference_time else "-"
+            pieces = [
+                formatted_time,
+                payment.status.upper(),
+                payment.method or "-",
+                f"INR {int(payment.amount or 0):,}",
+                f"Txn {payment.transaction_ref or '-'}",
+            ]
+            if payment.gateway_payment_id:
+                pieces.append(f"Gateway {payment.gateway_payment_id}")
+            if payment.coupon_code:
+                pieces.append(f"Promo {payment.coupon_code}")
+            if payment.failure_reason:
+                pieces.append(f"Reason {payment.failure_reason}")
+            line_text = " | ".join(pieces)
+            wrapped_line = _wrap_text(draw, line_text, small_font, page_width - 192)
+            for idx, line in enumerate(wrapped_line):
+                draw.text((96, payment_row_y + (idx * 30)), line, fill="#2f4371", font=small_font)
+            line_height = max(38, 30 * len(wrapped_line))
+            payment_row_y += line_height
+            draw.line((96, payment_row_y, page_width - 96, payment_row_y), fill="#ebeff9", width=2)
+            payment_row_y += 12
+            if payment_row_y > page_height - 170:
+                break
+    else:
+        draw.text((96, payment_row_y), "No payment transactions available.", fill="#5f7099", font=small_font)
+
+    draw.text(
+        (96, page_height - 128),
+        "This is a system-generated Eventify invoice and receipt.",
+        fill="#61739e",
+        font=small_font,
+    )
 
     output = BytesIO()
     page.save(output, format="PDF", resolution=150.0)
@@ -1194,6 +2127,27 @@ def home(request):
         searchable_events = searchable_events.filter(category__icontains=selected_category)
 
     featured_events = searchable_events.order_by("date")[:4]
+    trending_events_raw = get_trending_events(limit=12)
+    trending_events = []
+    normalized_query = query.lower()
+    for trending_event in trending_events_raw:
+        if selected_category and selected_category.lower() not in (trending_event.category or "").lower():
+            continue
+        if query:
+            haystack = " ".join(
+                [
+                    trending_event.title or "",
+                    trending_event.location or "",
+                    trending_event.category or "",
+                    trending_event.time or "",
+                ]
+            ).lower()
+            if normalized_query not in haystack:
+                if not parsed_date or trending_event.date != parsed_date:
+                    continue
+        trending_events.append(trending_event)
+        if len(trending_events) >= 6:
+            break
     
     # Apply same search/filter to upcoming events (exclude private events)
     upcoming_events_qs = Event.objects.filter(date__gte=today, is_private=False)
@@ -1223,17 +2177,20 @@ def home(request):
 
     album_limit = 12
     past_events_album = list(past_events_album_qs[:album_limit])
-    if len(past_events_album) < album_limit:
-        used_ids = [event.id for event in past_events_album]
-        fallback_qs = (
-            Event.objects.exclude(id__in=used_ids).filter(image_available_filter).order_by("-date")
-        )
-        if selected_category:
-            fallback_qs = fallback_qs.filter(category__icontains=selected_category)
-        fallback_count = album_limit - len(past_events_album)
-        past_events_album.extend(list(fallback_qs[:fallback_count]))
 
-    categories = ["Music", "Wedding", "Tech", "Sports", "Festival"]
+    categories = list(
+        EventCategory.objects.filter(is_active=True)
+        .values_list("name", flat=True)
+        .order_by("display_order", "name")
+    )
+    if not categories:
+        categories = list(
+            Event.objects.filter(is_private=False)
+            .exclude(category__exact="")
+            .values_list("category", flat=True)
+            .distinct()
+            .order_by("category")
+        )
     testimonials = [
         {
             "name": "Priya Sharma",
@@ -1253,11 +2210,13 @@ def home(request):
         "core/home.html",
         {
             "is_logged_in": request.user.is_authenticated,
+            "home_contact_email": request.user.email if request.user.is_authenticated else "",
             "home_profile_role": home_profile_role,
             "query": query,
             "selected_category": selected_category,
             "categories": categories,
             "featured_events": featured_events,
+            "trending_events": trending_events,
             "upcoming_events": upcoming_events,
             "past_events_album": past_events_album,
             "testimonials": testimonials,
@@ -1281,48 +2240,35 @@ def newsletter_subscribe(request):
         messages.error(request, "Please enter a valid email address.")
         return redirect("home")
 
-    question = (request.POST.get("question") or "").strip()
-    
-    # Encrypt creator emails for security
-    raw_creator_emails = ["asing27748@gmail.com", "vishwakarmaayush3884@gmail.com", "2023bca136@axiscolleges.in"]
-    creator_emails = []
-    for e in raw_creator_emails:
-        try:
-            # Encrypt each email with signing
-            encrypted = signing.dumps(e, salt="eventify-creator-email")
-            creator_emails.append(encrypted)
-        except Exception:
-            # Fallback to original if encryption fails
-            creator_emails.append(e)
-    
-    if question:
-        subject = f"New Subscription and Question from {email}"
-        message = f"User Email: {email}\n\nQuestion: {question}"
-    else:
-        subject = f"New Newsletter Subscription from {email}"
-        message = f"User Email: {email}"
-    
+    question = sanitize_text_input(request.POST.get("question"), max_length=1000)
+    if not question:
+        messages.error(request, "Please enter your question.")
+        return redirect("home")
+
+    subject = f"New Subscription and Question from {email}"
+    message = f"User Email: {email}\n\nQuestion: {question}"
+
     try:
         from django.core.mail import send_mail
-        from django.conf import settings
-        from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@eventify.com')
-        
-        # Try to send to each creator with decrypted email
-        for encrypted_email in creator_emails:
-            try:
-                # Try to decrypt - if it fails, it's already plaintext
-                recipient_email = signing.loads(encrypted_email, salt="eventify-creator-email")
-            except Exception:
-                # Already plaintext or decryption failed
-                recipient_email = encrypted_email
-            
-            send_mail(subject, message, from_email, [recipient_email], fail_silently=False)
-        
+        from_email = (
+            (getattr(settings, "DEFAULT_FROM_EMAIL", "") or "").strip()
+            or (getattr(settings, "EMAIL_HOST_USER", "") or "").strip()
+            or "noreply@eventify.com"
+        )
+
+        send_mail(
+            subject,
+            message,
+            from_email,
+            list(NEWSLETTER_CONTACT_RECIPIENTS),
+            fail_silently=False,
+        )
+
         messages.success(request, "Thank you! Your subscription has been sent to our team.")
     except Exception as e:
         print(f"Email sending failed: {e}")
         messages.success(request, "Thank you! Your subscription has been submitted.")
-    
+
     return redirect("home")
 
 
@@ -1352,19 +2298,65 @@ def login_submit(request):
         messages.error(request, "Please fill all login fields.")
         return redirect("/auth/?tab=login")
 
+    locked_state, remaining_seconds = get_login_lockout(role, contact)
+    if locked_state:
+        record_audit_log(
+            action="login_blocked",
+            summary="Blocked login attempt due to temporary lockout.",
+            category="auth",
+            status="failure",
+            request=request,
+            actor_contact=contact,
+            metadata={"role": role, "remaining_seconds": remaining_seconds},
+        )
+        messages.error(request, format_lockout_message(remaining_seconds))
+        return redirect("/auth/?tab=login")
+
     profile = find_profile_by_contact_role(contact, role)
     if not profile:
+        throttle = record_failed_login(role, contact)
+        remaining = 0
+        if throttle and throttle.locked_until and throttle.locked_until > timezone.now():
+            remaining = int((throttle.locked_until - timezone.now()).total_seconds())
+        record_audit_log(
+            action="login_failed",
+            summary="Failed login attempt for unknown account or role.",
+            category="auth",
+            status="failure",
+            request=request,
+            actor_contact=contact,
+            metadata={"role": role, "locked": bool(remaining)},
+        )
+        if remaining:
+            messages.error(request, format_lockout_message(remaining))
+            return redirect("/auth/?tab=login")
         messages.error(request, "Invalid credentials for selected role.")
         return redirect("/auth/?tab=login")
 
     user = authenticate(request, username=profile.user.username, password=password)
     if not user:
+        throttle = record_failed_login(role, contact)
+        remaining = 0
+        if throttle and throttle.locked_until and throttle.locked_until > timezone.now():
+            remaining = int((throttle.locked_until - timezone.now()).total_seconds())
+        record_audit_log(
+            action="login_failed",
+            summary="Failed login attempt due to invalid password.",
+            category="auth",
+            status="failure",
+            request=request,
+            user=profile.user,
+            actor_contact=contact,
+            metadata={"role": role, "locked": bool(remaining)},
+        )
+        if remaining:
+            messages.error(request, format_lockout_message(remaining))
+            return redirect("/auth/?tab=login")
         messages.error(request, "Invalid credentials for selected role.")
         return redirect("/auth/?tab=login")
 
-    login(request, user)
-    messages.success(request, "Login successful.")
-    return redirect("dashboard")
+    clear_failed_logins(role, contact)
+    return complete_login_after_primary_auth(request, user, profile, auth_source="password")
 
 
 def send_otp_email(contact, otp_value, purpose, name=""):
@@ -1418,7 +2410,7 @@ def register_send_otp(request):
         return redirect("auth_page")
 
     role = (request.POST.get("role") or "").strip()
-    name = (request.POST.get("name") or "").strip()
+    name = sanitize_text_input(request.POST.get("name"), max_length=120)
     contact = (request.POST.get("contact") or "").strip().lower()
     password = request.POST.get("password") or ""
     confirm_password = request.POST.get("confirmPassword") or ""
@@ -1431,9 +2423,13 @@ def register_send_otp(request):
         messages.error(request, "Password and confirm password do not match.")
         return redirect("/auth/?tab=register")
 
-    if len(password) < 6:
-        messages.error(request, "Password must be at least 6 characters.")
-        return redirect("/auth/?tab=register")
+    password_error_redirect = show_password_validation_error(
+        request,
+        password,
+        redirect_name="/auth/?tab=register",
+    )
+    if password_error_redirect:
+        return password_error_redirect
 
     if Profile.objects.filter(contact=contact, role=role).exists():
         messages.error(request, "This email/phone is already registered for selected role.")
@@ -1462,6 +2458,15 @@ def register_send_otp(request):
     
     # Store in session for demo purposes
     request.session["last_otp_preview"] = {"request_id": request_obj.id, "otp": otp_value}
+    record_audit_log(
+        action="registration_otp_requested",
+        summary="Registration OTP requested.",
+        category="account",
+        status="info",
+        request=request,
+        actor_contact=contact,
+        metadata={"role": role},
+    )
     return redirect(f"/verify-otp/?request_id={request_obj.id}")
 
 
@@ -1535,6 +2540,16 @@ def verify_otp(request):
         otp_request.save(update_fields=["is_used"])
         request.session.pop("last_otp_preview", None)
         login(request, user)
+        initialize_secure_session(request)
+        record_audit_log(
+            action="account_registered",
+            summary="Account created after OTP verification.",
+            category="account",
+            status="success",
+            request=request,
+            user=user,
+            metadata={"role": otp_request.role},
+        )
         messages.success(request, "OTP verified. Auto login successful.")
         return redirect("dashboard")
 
@@ -1612,10 +2627,6 @@ def reset_password(request):
         messages.error(request, "Please enter new password and confirm password.")
         return redirect("reset_password")
 
-    if len(password) < 6:
-        messages.error(request, "Password must be at least 6 characters.")
-        return redirect("reset_password")
-
     if password != confirm_password:
         messages.error(request, "Password and confirm password do not match.")
         return redirect("reset_password")
@@ -1625,6 +2636,15 @@ def reset_password(request):
         request.session.pop("reset_user_id", None)
         messages.error(request, "User not found.")
         return redirect("auth_page")
+
+    password_error_redirect = show_password_validation_error(
+        request,
+        password,
+        user=user,
+        redirect_name="reset_password",
+    )
+    if password_error_redirect:
+        return password_error_redirect
 
     user.set_password(password)
     user.save(update_fields=["password"])
@@ -1636,6 +2656,15 @@ def reset_password(request):
     )
     request.session.pop("reset_user_id", None)
     login(request, user)
+    initialize_secure_session(request)
+    record_audit_log(
+        action="password_reset",
+        summary="Password reset completed via OTP flow.",
+        category="account",
+        status="success",
+        request=request,
+        user=user,
+    )
     messages.success(request, "Password reset successful. Auto login complete.")
     return redirect("dashboard")
 
@@ -1643,6 +2672,14 @@ def reset_password(request):
 @login_required(login_url="auth_page")
 def logout_submit(request):
     if request.method == "POST":
+        record_audit_log(
+            action="logout",
+            summary="User logged out.",
+            category="auth",
+            status="info",
+            request=request,
+            user=request.user,
+        )
         logout(request)
     return redirect("home")
 
@@ -1653,25 +2690,75 @@ def dashboard(request):
     profile = get_or_create_profile(request.user)
     today = timezone.localdate()
 
+    if profile.role == Profile.ROLE_ADMIN:
+        return redirect("admin_dashboard")
+
     if profile.role == Profile.ROLE_ORGANIZER:
-        events_qs = Event.objects.filter(created_by=request.user)
+        events_qs = Event.objects.filter(created_by=request.user).prefetch_related(
+            Prefetch(
+                "bookings",
+                queryset=Booking.objects.select_related("user").prefetch_related("payments").order_by("-booking_date"),
+            )
+        )
         bookings_qs = Booking.objects.filter(event__created_by=request.user).select_related(
             "event",
             "user",
             "active_activity_slot",
             "helper_activity_slot",
+        ).prefetch_related("payments")
+        paid_payments_qs = Payment.objects.filter(
+            booking__event__created_by=request.user,
+            status=Payment.STATUS_PAID,
         )
+        refunded_payments_qs = Payment.objects.filter(
+            booking__event__created_by=request.user,
+            status=Payment.STATUS_REFUNDED,
+        )
+        gross_earnings = paid_payments_qs.aggregate(total=Sum("amount"))["total"] or 0
+        refund_total = refunded_payments_qs.aggregate(total=Sum("amount"))["total"] or 0
         stats = {
             "total_events": events_qs.count(),
             "total_bookings": bookings_qs.count(),
-            "total_revenue": bookings_qs.filter(payment_status=Booking.PAYMENT_PAID).aggregate(
-                total=Sum("total_amount")
+            "total_revenue": max(0, gross_earnings - refund_total),
+            "gross_earnings": gross_earnings,
+            "refund_total": refund_total,
+            "total_tickets_sold": bookings_qs.filter(payment_status=Booking.PAYMENT_PAID).aggregate(
+                total=Sum("tickets")
             )["total"]
             or 0,
             "pending_requests": bookings_qs.filter(status=Booking.STATUS_PENDING).count(),
         }
         recent_bookings = bookings_qs.order_by("-booking_date")[:6]
         upcoming_events = events_qs.order_by("date")[:4]
+        revenue_rows = []
+        for event in events_qs.order_by("date"):
+            event_bookings = list(event.bookings.all())
+            tickets_sold = sum(
+                int(booking.tickets or 0)
+                for booking in event_bookings
+                if booking.payment_status == Booking.PAYMENT_PAID
+            )
+            gross = sum(
+                int(payment.amount or 0)
+                for booking in event_bookings
+                for payment in booking.payments.all()
+                if payment.status == Payment.STATUS_PAID
+            )
+            refunds = sum(
+                int(payment.amount or 0)
+                for booking in event_bookings
+                for payment in booking.payments.all()
+                if payment.status == Payment.STATUS_REFUNDED
+            )
+            revenue_rows.append(
+                {
+                    "event": event,
+                    "tickets_sold": tickets_sold,
+                    "gross": gross,
+                    "refunds": refunds,
+                    "net": max(0, gross - refunds),
+                }
+            )
         return render_app(
             request,
             "core/dashboard.html",
@@ -1681,6 +2768,7 @@ def dashboard(request):
                 "stats": stats,
                 "recent_bookings": recent_bookings,
                 "upcoming_events": upcoming_events,
+                "revenue_rows": revenue_rows,
             },
         )
 
@@ -1688,7 +2776,13 @@ def dashboard(request):
         "event",
         "active_activity_slot",
         "helper_activity_slot",
-    )
+    ).prefetch_related("payments")
+    paid_total = Payment.objects.filter(booking__user=request.user, status=Payment.STATUS_PAID).aggregate(
+        total=Sum("amount")
+    )["total"] or 0
+    refund_total = Payment.objects.filter(booking__user=request.user, status=Payment.STATUS_REFUNDED).aggregate(
+        total=Sum("amount")
+    )["total"] or 0
     stats = {
         "total_bookings": bookings_qs.count(),
         "upcoming_events": bookings_qs.filter(event__date__gte=today).exclude(
@@ -1697,10 +2791,7 @@ def dashboard(request):
         "completed_events": bookings_qs.filter(
             Q(event__date__lt=today) | Q(status=Booking.STATUS_COMPLETED)
         ).count(),
-        "total_spending": bookings_qs.filter(payment_status=Booking.PAYMENT_PAID).aggregate(
-            total=Sum("total_amount")
-        )["total"]
-        or 0,
+        "total_spending": max(0, paid_total - refund_total),
     }
     recent_bookings = bookings_qs.order_by("-booking_date")[:6]
     # Only show public events in user dashboard
@@ -1762,11 +2853,16 @@ def browse_events(request):
 @login_required(login_url="auth_page")
 def event_detail(request, event_id):
     ensure_seeded()
-    event = get_object_or_404(Event, id=event_id)
+    event = get_object_or_404(
+        Event.objects.prefetch_related("schedules", "gallery_images", "ticket_types"),
+        id=event_id,
+    )
     related_events = Event.objects.filter(category=event.category).exclude(id=event.id).order_by(
         "date"
     )[:4]
     profile = get_or_create_profile(request.user)
+    is_event_owner = profile.role == Profile.ROLE_ORGANIZER and event.created_by_id == request.user.id
+    is_admin = profile.role == Profile.ROLE_ADMIN
     user_event_booking = None
     can_download_ticket = False
     needs_profile_photo = False
@@ -1774,10 +2870,15 @@ def event_detail(request, event_id):
     role_slots = build_event_role_slots(event)
     show_participants_panel = False
     event_participants = []
+    event_schedules = list(event.schedules.filter(is_active=True).order_by("display_order", "start_time", "id"))
+    event_gallery_images = list(event.gallery_images.filter(is_active=True).order_by("display_order", "-uploaded_at"))
+    bookable_ticket_types = get_bookable_ticket_types(event)
+    can_manage_event_assets = is_event_owner or is_admin
 
     if profile.role == Profile.ROLE_USER:
         user_event_booking = (
             Booking.objects.filter(user=request.user, event=event)
+            .select_related("ticket_type")
             .order_by("-booking_date", "-id")
             .first()
         )
@@ -1791,7 +2892,7 @@ def event_detail(request, event_id):
                 and user_event_booking.status != Booking.STATUS_CANCELLED
             )
             needs_profile_photo = can_download_ticket and not bool(profile.profile_image)
-    elif profile.role == Profile.ROLE_ORGANIZER and event.created_by_id == request.user.id:
+    elif is_event_owner or is_admin:
         show_participants_panel = True
         event_participants = list(
             Booking.objects.select_related(
@@ -1799,16 +2900,18 @@ def event_detail(request, event_id):
                 "user__profile",
                 "active_activity_slot",
                 "helper_activity_slot",
+                "ticket_type",
             )
             .filter(event=event)
             .exclude(status=Booking.STATUS_CANCELLED)
             .order_by("-booking_date", "-id")
         )
-        for participant_booking in event_participants:
-            participant_booking.ticket_scan_url = reverse(
-                "ticket_qr_scan",
-                args=[generate_ticket_token(participant_booking)],
-            )
+        if is_event_owner:
+            for participant_booking in event_participants:
+                participant_booking.ticket_scan_url = reverse(
+                    "ticket_qr_scan",
+                    args=[generate_ticket_token(participant_booking)],
+                )
 
     return render_app(
         request,
@@ -1824,6 +2927,11 @@ def event_detail(request, event_id):
             "role_slots": role_slots,
             "show_participants_panel": show_participants_panel,
             "event_participants": event_participants,
+            "event_schedules": event_schedules,
+            "event_gallery_images": event_gallery_images,
+            "bookable_ticket_types": bookable_ticket_types,
+            "can_manage_event_assets": can_manage_event_assets,
+            "is_event_owner": is_event_owner,
         },
     )
 
@@ -1831,9 +2939,12 @@ def event_detail(request, event_id):
 @role_required(Profile.ROLE_USER)
 def book_event(request, event_id):
     ensure_seeded()
-    event = get_object_or_404(Event, id=event_id)
+    event = get_object_or_404(Event.objects.prefetch_related("ticket_types"), id=event_id)
     existing_booking = (
-        Booking.objects.filter(user=request.user, event=event).order_by("-booking_date", "-id").first()
+        Booking.objects.filter(user=request.user, event=event)
+        .exclude(status=Booking.STATUS_CANCELLED)
+        .order_by("-booking_date", "-id")
+        .first()
     )
 
     if existing_booking:
@@ -1868,6 +2979,10 @@ def book_event(request, event_id):
     )
     default_active_activity_id = str(default_active_activity["id"]) if default_active_activity else ""
     default_helper_activity_id = str(default_helper_activity["id"]) if default_helper_activity else ""
+    bookable_ticket_types = get_bookable_ticket_types(event)
+    default_ticket_type = bookable_ticket_types[0] if bookable_ticket_types else None
+    default_ticket_type_id = str(default_ticket_type.id) if default_ticket_type else ""
+    default_ticket_quantity = 1
 
     if request.method == "GET":
         return render_app(
@@ -1881,6 +2996,9 @@ def book_event(request, event_id):
                 "selected_application_role": Booking.ROLE_ATTENDEE,
                 "selected_active_activity_id": default_active_activity_id,
                 "selected_helper_activity_id": default_helper_activity_id,
+                "ticket_types": bookable_ticket_types,
+                "selected_ticket_type_id": default_ticket_type_id,
+                "selected_ticket_quantity": default_ticket_quantity,
             },
         )
 
@@ -1888,6 +3006,8 @@ def book_event(request, event_id):
     selected_application_role = (request.POST.get("applicationRole") or Booking.ROLE_ATTENDEE).strip()
     selected_active_activity_id = (request.POST.get("activeActivityId") or "").strip()
     selected_helper_activity_id = (request.POST.get("helperActivityId") or "").strip()
+    selected_ticket_type_id = (request.POST.get("ticketTypeId") or "").strip()
+    selected_ticket_quantity_raw = (request.POST.get("ticketQuantity") or "1").strip()
     if not attendee_name:
         messages.error(request, "Please provide attendee name.")
         return redirect("book_event", event_id=event.id)
@@ -1976,11 +3096,46 @@ def book_event(request, event_id):
             messages.error(request, "Helper team slots are full. Choose another role.")
             return redirect("book_event", event_id=event.id)
 
+    selected_ticket_type = None
     tickets = 1
-    total_amount = event.price
+    if bookable_ticket_types:
+        if not selected_ticket_type_id:
+            messages.error(request, "Please select a ticket type.")
+            return redirect("book_event", event_id=event.id)
+        selected_ticket_type = next(
+            (item for item in bookable_ticket_types if str(item.id) == selected_ticket_type_id),
+            None,
+        )
+        if not selected_ticket_type:
+            messages.error(request, "Selected ticket type is invalid or unavailable.")
+            return redirect("book_event", event_id=event.id)
+
+        tickets = parse_positive_int(selected_ticket_quantity_raw, minimum=1)
+        if tickets is None:
+            messages.error(request, "Ticket quantity must be at least 1.")
+            return redirect("book_event", event_id=event.id)
+
+        if selected_application_role != Booking.ROLE_ATTENDEE:
+            tickets = 1
+
+        max_allowed = min(
+            int(selected_ticket_type.max_per_booking or tickets),
+            int(selected_ticket_type.available_quantity or 0),
+        )
+        if max_allowed <= 0:
+            messages.error(request, "Selected ticket type is sold out.")
+            return redirect("book_event", event_id=event.id)
+        if tickets > max_allowed:
+            messages.error(request, f"You can book up to {max_allowed} ticket(s) for this ticket type.")
+            return redirect("book_event", event_id=event.id)
+        total_amount = int(selected_ticket_type.price or 0) * tickets
+    else:
+        total_amount = int(event.price or 0) * tickets
+
     booking = Booking.objects.create(
         user=request.user,
         event=event,
+        ticket_type=selected_ticket_type,
         tickets=tickets,
         attendee_name=attendee_name,
         application_role=selected_application_role,
@@ -1996,19 +3151,256 @@ def book_event(request, event_id):
         f"Your booking request for '{event.title}' is created. Complete payment to confirm.",
         "booking",
     )
+    record_audit_log(
+        action="booking_created",
+        summary=f"Booking created for '{event.title}'.",
+        category="booking",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"booking_id": booking.id, "event_id": event.id, "tickets": tickets},
+    )
     messages.success(request, "Booking created. Please complete payment.")
     return redirect("payment_page", booking_id=booking.id)
+
+
+def render_razorpay_checkout_page(
+    request,
+    *,
+    active_page,
+    title,
+    description,
+    amount,
+    order_id,
+    verify_url,
+    cancel_url,
+    context_token,
+    prefill_name="",
+    prefill_email="",
+    prefill_contact="",
+):
+    return render_app(
+        request,
+        "core/razorpay_checkout.html",
+        active_page,
+        {
+            "checkout_title": title,
+            "checkout_description": description,
+            "checkout_amount": amount,
+            "razorpay_key_id": settings.RAZORPAY_KEY_ID,
+            "razorpay_order_id": order_id,
+            "verify_url": verify_url,
+            "cancel_url": cancel_url,
+            "context_token": context_token,
+            "prefill_name": prefill_name,
+            "prefill_email": prefill_email,
+            "prefill_contact": prefill_contact,
+        },
+    )
+
+
+def finalize_booking_payment(
+    booking,
+    *,
+    acting_user,
+    method,
+    final_amount,
+    promo=None,
+    coupon_code="",
+    discount_amount=0,
+    upi_id="",
+    gateway_provider="Eventify Local Gateway",
+    gateway_payment_id="",
+    verification_signature="",
+    payment_meta=None,
+):
+    capacity_error = ""
+    payment = None
+    already_paid = False
+
+    with transaction.atomic():
+        booking = (
+            Booking.objects.select_related("event", "ticket_type")
+            .select_for_update()
+            .get(id=booking.id, user=acting_user)
+        )
+        if booking.payment_status == Booking.PAYMENT_PAID:
+            already_paid = True
+        else:
+            locked_ticket_type = None
+            if booking.ticket_type_id:
+                locked_ticket_type = (
+                    TicketType.objects.select_for_update()
+                    .filter(id=booking.ticket_type_id, event_id=booking.event_id)
+                    .first()
+                )
+                if not locked_ticket_type or not locked_ticket_type.is_active:
+                    capacity_error = "Selected ticket type is no longer available."
+                else:
+                    now = timezone.now()
+                    if locked_ticket_type.sales_start and now < locked_ticket_type.sales_start:
+                        capacity_error = "Ticket sales for this ticket type have not started yet."
+                    elif locked_ticket_type.sales_end and now > locked_ticket_type.sales_end:
+                        capacity_error = "Ticket sales for this ticket type have ended."
+                    elif int(booking.tickets or 0) > int(locked_ticket_type.available_quantity or 0):
+                        capacity_error = (
+                            f"Only {int(locked_ticket_type.available_quantity or 0)} ticket(s) left "
+                            f"for {locked_ticket_type.name}."
+                        )
+
+            if not capacity_error:
+                booking.payment_status = Booking.PAYMENT_PAID
+                booking.status = Booking.STATUS_CONFIRMED
+                booking.total_amount = max(0, int(final_amount or 0))
+                if not booking.invoice_no:
+                    booking.invoice_no = generate_invoice_no()
+                booking.save(update_fields=["payment_status", "status", "total_amount", "invoice_no"])
+
+                payment = Payment.objects.create(
+                    booking=booking,
+                    amount=max(0, int(final_amount or 0)),
+                    method=(method or "Unknown")[:80],
+                    status=Payment.STATUS_PAID,
+                    transaction_ref=generate_payment_reference(),
+                    upi_id=(upi_id or "")[:120],
+                    gateway_provider=(gateway_provider or "Eventify Local Gateway")[:80],
+                    gateway_payment_id=(gateway_payment_id or get_gateway_payment_id(method))[:120],
+                    verification_signature=(verification_signature or "")[:180],
+                    verification_status="verified",
+                    coupon_code=(coupon_code or "").strip().upper(),
+                    discount_amount=max(0, int(discount_amount or 0)),
+                    payment_meta=payment_meta or {},
+                )
+                if promo:
+                    promo.used_count += 1
+                    promo.save(update_fields=["used_count"])
+
+                if locked_ticket_type:
+                    locked_ticket_type.available_quantity = max(
+                        0,
+                        int(locked_ticket_type.available_quantity or 0) - int(booking.tickets or 0),
+                    )
+                    locked_ticket_type.save(update_fields=["available_quantity"])
+
+    return booking, payment, capacity_error, already_paid
+
+
+def build_booking_razorpay_checkout(request, booking, final_amount, promo, discount_amount):
+    order = create_razorpay_order(
+        final_amount,
+        receipt=booking.ticket_reference,
+        notes={
+            "booking_id": str(booking.id),
+            "event_id": str(booking.event_id),
+            "user_id": str(request.user.id),
+        },
+    )
+    order_id = (order or {}).get("id", "").strip()
+    if not order_id:
+        raise IntegrationError("Razorpay did not return an order id.")
+
+    context_token = sign_gateway_context(
+        {
+            "booking_id": booking.id,
+            "user_id": request.user.id,
+            "order_id": order_id,
+            "amount": int(final_amount or 0),
+            "promo_id": promo.id if promo else None,
+            "coupon_code": promo.code if promo else "",
+            "discount_amount": int(discount_amount or 0),
+        },
+        salt="razorpay-booking-payment",
+    )
+    profile = get_or_create_profile(request.user)
+    return render_razorpay_checkout_page(
+        request,
+        active_page="my-bookings",
+        title="Complete Secure Payment",
+        description=f"{booking.event.title} booking checkout",
+        amount=int(final_amount or 0),
+        order_id=order_id,
+        verify_url=reverse("payment_verify", args=[booking.id]),
+        cancel_url=reverse("payment_page", args=[booking.id]),
+        context_token=context_token,
+        prefill_name=request.user.get_full_name() or request.user.first_name or booking.attendee_name,
+        prefill_email=request.user.email,
+        prefill_contact=(profile.phone or "").strip(),
+    )
+
+
+def build_private_event_razorpay_checkout(request, private_payment):
+    order = create_razorpay_order(
+        private_payment.amount,
+        receipt=f"private-{private_payment.id}",
+        notes={
+            "private_payment_id": str(private_payment.id),
+            "event_id": str(private_payment.event_id),
+            "organizer_id": str(request.user.id),
+        },
+    )
+    order_id = (order or {}).get("id", "").strip()
+    if not order_id:
+        raise IntegrationError("Razorpay did not return an order id.")
+
+    private_payment.gateway_provider = "Razorpay"
+    private_payment.gateway_order_id = order_id
+    private_payment.verification_status = "pending"
+    private_payment.payment_meta = {"razorpay_order": order}
+    private_payment.save(
+        update_fields=[
+            "gateway_provider",
+            "gateway_order_id",
+            "verification_status",
+            "payment_meta",
+        ]
+    )
+
+    context_token = sign_gateway_context(
+        {
+            "private_payment_id": private_payment.id,
+            "organizer_id": request.user.id,
+            "order_id": order_id,
+            "amount": int(private_payment.amount or 0),
+        },
+        salt="razorpay-private-event-payment",
+    )
+    profile = get_or_create_profile(request.user)
+    return render_razorpay_checkout_page(
+        request,
+        active_page="my-events",
+        title="Private Event Checkout",
+        description=f"{private_payment.event.title} organizer payment",
+        amount=int(private_payment.amount or 0),
+        order_id=order_id,
+        verify_url=reverse("private_event_payment_verify", args=[private_payment.id]),
+        cancel_url=reverse("private_event_payment_page", args=[private_payment.id]),
+        context_token=context_token,
+        prefill_name=request.user.get_full_name() or request.user.first_name or request.user.username,
+        prefill_email=request.user.email,
+        prefill_contact=(profile.phone or "").strip(),
+    )
 
 
 @role_required(Profile.ROLE_USER)
 def payment_page(request, booking_id):
     ensure_seeded()
-    booking = get_object_or_404(Booking, id=booking_id, user=request.user)
+    booking = get_object_or_404(
+        Booking.objects.select_related("event", "ticket_type").prefetch_related("payments"),
+        id=booking_id,
+        user=request.user,
+    )
+    available_promos = [promo for promo in PromoCode.objects.filter(active=True).order_by("code") if promo.can_use()]
     return render_app(
         request,
         "core/payment.html",
         "my-bookings",
-        {"booking": booking},
+        {
+            "booking": booking,
+            "razorpay_enabled": razorpay_ready(),
+            "payment_methods": PAYMENT_METHODS,
+            "available_promos": available_promos,
+            "recent_payments": booking.payments.all()[:5],
+        },
     )
 
 
@@ -2018,41 +3410,236 @@ def payment_pay(request, booking_id):
     if request.method != "POST":
         return redirect("payment_page", booking_id=booking_id)
 
-    booking = get_object_or_404(Booking, id=booking_id, user=request.user)
+    booking = get_object_or_404(
+        Booking.objects.select_related("event", "user", "ticket_type").prefetch_related("payments"),
+        id=booking_id,
+        user=request.user,
+    )
     method = (request.POST.get("method") or "").strip()
+    upi_id = (request.POST.get("upiId") or "").strip().lower()
+    promo_code = (request.POST.get("promoCode") or "").strip().upper()
 
     if booking.payment_status == Booking.PAYMENT_PAID:
         return redirect("booking_success", booking_id=booking.id)
 
-    if not method:
-        messages.error(request, "Please select payment method.")
+    base_amount = int(booking.total_amount or 0)
+    promo, discount_amount, promo_error = validate_promo_for_amount(promo_code, base_amount)
+    if promo_error:
+        log_failed_payment(booking, method or RAZORPAY_METHOD, promo_error, promo_code)
+        messages.error(request, promo_error)
         return redirect("payment_page", booking_id=booking.id)
 
-    booking.payment_status = Booking.PAYMENT_PAID
-    booking.status = Booking.STATUS_CONFIRMED
-    booking.invoice_no = generate_invoice_no()
-    booking.save(update_fields=["payment_status", "status", "invoice_no"])
+    final_amount = max(0, base_amount - discount_amount)
 
-    Payment.objects.create(
-        booking=booking,
-        amount=booking.total_amount,
+    if razorpay_ready():
+        try:
+            return build_booking_razorpay_checkout(request, booking, final_amount, promo, discount_amount)
+        except IntegrationError as exc:
+            log_failed_payment(
+                booking,
+                RAZORPAY_METHOD,
+                str(exc),
+                promo_code,
+                gateway_provider="Razorpay",
+            )
+            messages.error(request, f"Razorpay checkout could not be started: {exc}")
+            return redirect("payment_page", booking_id=booking.id)
+
+    if method not in PAYMENT_METHODS:
+        log_failed_payment(booking, method, "Please select a valid payment method.", promo_code)
+        messages.error(request, "Please select a valid payment method.")
+        return redirect("payment_page", booking_id=booking.id)
+
+    payment_details, payment_error = extract_payment_details(request, method)
+    if payment_error:
+        log_failed_payment(booking, method, payment_error, promo_code)
+        messages.error(request, payment_error)
+        return redirect("payment_page", booking_id=booking.id)
+    upi_id = payment_details.get("upi_id", "")
+    payment_meta = payment_details.get("payment_meta", {})
+    gateway_payment_id = get_gateway_payment_id(method)
+    verification_signature = hashlib.sha256(
+        f"{booking.id}:{gateway_payment_id}:{final_amount}:{method}".encode("utf-8")
+    ).hexdigest()[:48]
+
+    booking, payment, capacity_error, already_paid = finalize_booking_payment(
+        booking,
+        acting_user=request.user,
         method=method,
-        status="paid",
+        final_amount=final_amount,
+        promo=promo,
+        coupon_code=promo.code if promo else promo_code,
+        discount_amount=discount_amount,
+        upi_id=upi_id,
+        gateway_provider="Eventify Local Gateway",
+        gateway_payment_id=gateway_payment_id,
+        verification_signature=verification_signature,
+        payment_meta=payment_meta,
     )
+
+    if already_paid:
+        return redirect("booking_success", booking_id=booking.id)
+    if capacity_error:
+        log_failed_payment(booking, method, capacity_error, promo_code)
+        messages.error(request, capacity_error)
+        return redirect("payment_page", booking_id=booking.id)
+
     create_notification(
         request.user,
         "Booking Confirmed",
         f"Payment successful for '{booking.event.title}'. Booking is confirmed.",
         "payment",
     )
-    messages.success(request, "Payment successful. Booking confirmed.")
+    record_audit_log(
+        action="payment_success",
+        summary=f"Razorpay payment completed for booking {booking.ticket_reference}.",
+        category="payment",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"booking_id": booking.id, "payment_id": payment.id if payment else None, "method": RAZORPAY_METHOD},
+    )
+    email_sent = send_booking_ticket_email(request, booking, payment)
+    if email_sent:
+        messages.success(request, "Payment successful. Booking confirmed and ticket emailed.")
+    else:
+        messages.success(request, "Payment successful. Booking confirmed.")
+    return redirect("booking_success", booking_id=booking.id)
+
+
+@role_required(Profile.ROLE_USER)
+def payment_verify(request, booking_id):
+    ensure_seeded()
+    if request.method != "POST":
+        return redirect("payment_page", booking_id=booking_id)
+
+    booking = get_object_or_404(
+        Booking.objects.select_related("event", "user", "ticket_type").prefetch_related("payments"),
+        id=booking_id,
+        user=request.user,
+    )
+    if booking.payment_status == Booking.PAYMENT_PAID:
+        return redirect("booking_success", booking_id=booking.id)
+
+    context_token = (request.POST.get("contextToken") or "").strip()
+    order_id = (request.POST.get("razorpay_order_id") or "").strip()
+    payment_id = (request.POST.get("razorpay_payment_id") or "").strip()
+    signature = (request.POST.get("razorpay_signature") or "").strip()
+
+    try:
+        gateway_context = load_gateway_context(context_token, salt="razorpay-booking-payment")
+    except (BadSignature, SignatureExpired):
+        log_failed_payment(
+            booking,
+            RAZORPAY_METHOD,
+            "Razorpay payment session expired or is invalid.",
+            gateway_provider="Razorpay",
+            gateway_payment_id=payment_id,
+            verification_signature=signature,
+        )
+        messages.error(request, "Payment session expired. Please start Razorpay checkout again.")
+        return redirect("payment_page", booking_id=booking.id)
+
+    if (
+        int(gateway_context.get("booking_id") or 0) != booking.id
+        or int(gateway_context.get("user_id") or 0) != request.user.id
+        or (gateway_context.get("order_id") or "").strip() != order_id
+    ):
+        log_failed_payment(
+            booking,
+            RAZORPAY_METHOD,
+            "Razorpay checkout context mismatch.",
+            gateway_provider="Razorpay",
+            gateway_payment_id=payment_id,
+            verification_signature=signature,
+            payment_meta={"razorpay_order_id": order_id},
+        )
+        messages.error(request, "Invalid payment verification payload.")
+        return redirect("payment_page", booking_id=booking.id)
+
+    if not payment_id or not signature or not verify_razorpay_signature(order_id, payment_id, signature):
+        log_failed_payment(
+            booking,
+            RAZORPAY_METHOD,
+            "Razorpay signature verification failed.",
+            coupon_code=gateway_context.get("coupon_code") or "",
+            gateway_provider="Razorpay",
+            gateway_payment_id=payment_id,
+            verification_signature=signature,
+            payment_meta={"razorpay_order_id": order_id},
+        )
+        messages.error(request, "Payment verification failed. No charge was recorded in Eventify.")
+        return redirect("payment_page", booking_id=booking.id)
+
+    promo = None
+    promo_id = gateway_context.get("promo_id")
+    if promo_id:
+        promo = PromoCode.objects.filter(id=promo_id).first()
+
+    booking, payment, capacity_error, already_paid = finalize_booking_payment(
+        booking,
+        acting_user=request.user,
+        method=RAZORPAY_METHOD,
+        final_amount=int(gateway_context.get("amount") or 0),
+        promo=promo,
+        coupon_code=gateway_context.get("coupon_code") or "",
+        discount_amount=int(gateway_context.get("discount_amount") or 0),
+        gateway_provider="Razorpay",
+        gateway_payment_id=payment_id,
+        verification_signature=signature,
+        payment_meta={
+            "razorpay_order_id": order_id,
+            "razorpay_payment_id": payment_id,
+        },
+    )
+
+    if already_paid:
+        return redirect("booking_success", booking_id=booking.id)
+    if capacity_error:
+        log_failed_payment(
+            booking,
+            RAZORPAY_METHOD,
+            capacity_error,
+            coupon_code=gateway_context.get("coupon_code") or "",
+            gateway_provider="Razorpay",
+            gateway_payment_id=payment_id,
+            verification_signature=signature,
+            payment_meta={"razorpay_order_id": order_id},
+        )
+        messages.error(request, capacity_error)
+        return redirect("payment_page", booking_id=booking.id)
+
+    create_notification(
+        request.user,
+        "Booking Confirmed",
+        f"Payment successful for '{booking.event.title}'. Booking is confirmed.",
+        "payment",
+    )
+    record_audit_log(
+        action="payment_success",
+        summary=f"Payment completed for booking {booking.ticket_reference}.",
+        category="payment",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"booking_id": booking.id, "payment_id": payment.id if payment else None, "method": method},
+    )
+    email_sent = send_booking_ticket_email(request, booking, payment)
+    if email_sent:
+        messages.success(request, "Razorpay payment successful. Booking confirmed and ticket emailed.")
+    else:
+        messages.success(request, "Razorpay payment successful. Booking confirmed.")
     return redirect("booking_success", booking_id=booking.id)
 
 
 @role_required(Profile.ROLE_USER)
 def booking_success(request, booking_id):
     ensure_seeded()
-    booking = get_object_or_404(Booking, id=booking_id, user=request.user)
+    booking = get_object_or_404(
+        Booking.objects.select_related("event", "ticket_type"),
+        id=booking_id,
+        user=request.user,
+    )
     return render_app(
         request,
         "core/booking_success.html",
@@ -2077,7 +3664,11 @@ def private_event_payment_page(request, payment_id):
         request,
         "core/private_event_payment.html",
         "my-events",
-        {"private_payment": private_payment},
+        {
+            "private_payment": private_payment,
+            "razorpay_enabled": razorpay_ready(),
+            "payment_methods": PAYMENT_METHODS,
+        },
     )
 
 
@@ -2096,15 +3687,180 @@ def private_event_payment_pay(request, payment_id):
         messages.info(request, "Private event payment is already completed.")
         return redirect("my_events")
 
+    if razorpay_ready():
+        try:
+            return build_private_event_razorpay_checkout(request, private_payment)
+        except IntegrationError as exc:
+            private_payment.status = PrivateEventPayment.STATUS_FAILED
+            private_payment.failure_reason = str(exc)
+            private_payment.verification_status = "invalid"
+            private_payment.save(update_fields=["status", "failure_reason", "verification_status"])
+            messages.error(request, f"Razorpay checkout could not be started: {exc}")
+            return redirect("private_event_payment_page", payment_id=private_payment.id)
+
     method = (request.POST.get("method") or "").strip()
-    if not method:
-        messages.error(request, "Please select payment method.")
+    if method not in PAYMENT_METHODS:
+        messages.error(request, "Please select a valid payment method.")
+        return redirect("private_event_payment_page", payment_id=private_payment.id)
+
+    _payment_details, payment_error = extract_payment_details(request, method)
+    if payment_error:
+        messages.error(request, payment_error)
         return redirect("private_event_payment_page", payment_id=private_payment.id)
 
     private_payment.status = PrivateEventPayment.STATUS_PAID
     private_payment.method = method
     private_payment.paid_at = timezone.now()
     private_payment.save(update_fields=["status", "method", "paid_at"])
+    record_audit_log(
+        action="private_event_payment_success",
+        summary=f"Private event payment completed for '{private_payment.event.title}'.",
+        category="payment",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"private_payment_id": private_payment.id, "method": method},
+    )
+
+    guest_recipients, _invalid_guests, _normalized = parse_event_email_list(
+        private_payment.event.guest_emails
+    )
+    sent_count, failed_count = send_private_event_invitation_emails(
+        request,
+        private_payment.event,
+        guest_recipients,
+    )
+
+    if sent_count and failed_count:
+        messages.success(
+            request,
+            f"Payment successful. Invitations sent to {sent_count} guest(s); {failed_count} failed.",
+        )
+    elif sent_count:
+        messages.success(
+            request,
+            f"Payment successful. Invitations sent to {sent_count} guest(s).",
+        )
+    elif failed_count:
+        messages.warning(
+            request,
+            "Payment successful, but invitations could not be sent. Please check email server settings.",
+        )
+    else:
+        messages.success(request, "Payment successful for private event.")
+
+    return redirect("my_events")
+
+
+@role_required(Profile.ROLE_ORGANIZER)
+def private_event_payment_verify(request, payment_id):
+    ensure_seeded()
+    if request.method != "POST":
+        return redirect("private_event_payment_page", payment_id=payment_id)
+
+    private_payment = get_object_or_404(
+        PrivateEventPayment.objects.select_related("event"),
+        id=payment_id,
+        organizer=request.user,
+    )
+    if private_payment.status == PrivateEventPayment.STATUS_PAID:
+        return redirect("my_events")
+
+    context_token = (request.POST.get("contextToken") or "").strip()
+    order_id = (request.POST.get("razorpay_order_id") or "").strip()
+    payment_id_value = (request.POST.get("razorpay_payment_id") or "").strip()
+    signature = (request.POST.get("razorpay_signature") or "").strip()
+
+    try:
+        gateway_context = load_gateway_context(context_token, salt="razorpay-private-event-payment")
+    except (BadSignature, SignatureExpired):
+        private_payment.status = PrivateEventPayment.STATUS_FAILED
+        private_payment.failure_reason = "Razorpay payment session expired or is invalid."
+        private_payment.verification_status = "invalid"
+        private_payment.save(update_fields=["status", "failure_reason", "verification_status"])
+        messages.error(request, "Payment session expired. Please restart the private event checkout.")
+        return redirect("private_event_payment_page", payment_id=private_payment.id)
+
+    if (
+        int(gateway_context.get("private_payment_id") or 0) != private_payment.id
+        or int(gateway_context.get("organizer_id") or 0) != request.user.id
+        or (gateway_context.get("order_id") or "").strip() != order_id
+    ):
+        private_payment.status = PrivateEventPayment.STATUS_FAILED
+        private_payment.failure_reason = "Razorpay checkout context mismatch."
+        private_payment.gateway_payment_id = payment_id_value
+        private_payment.verification_signature = signature
+        private_payment.verification_status = "invalid"
+        private_payment.payment_meta = {"razorpay_order_id": order_id}
+        private_payment.save(
+            update_fields=[
+                "status",
+                "failure_reason",
+                "gateway_payment_id",
+                "verification_signature",
+                "verification_status",
+                "payment_meta",
+            ]
+        )
+        messages.error(request, "Invalid payment verification payload.")
+        return redirect("private_event_payment_page", payment_id=private_payment.id)
+
+    if not payment_id_value or not signature or not verify_razorpay_signature(order_id, payment_id_value, signature):
+        private_payment.status = PrivateEventPayment.STATUS_FAILED
+        private_payment.failure_reason = "Razorpay signature verification failed."
+        private_payment.gateway_payment_id = payment_id_value
+        private_payment.verification_signature = signature
+        private_payment.verification_status = "invalid"
+        private_payment.payment_meta = {"razorpay_order_id": order_id}
+        private_payment.save(
+            update_fields=[
+                "status",
+                "failure_reason",
+                "gateway_payment_id",
+                "verification_signature",
+                "verification_status",
+                "payment_meta",
+            ]
+        )
+        messages.error(request, "Payment verification failed. Please try again.")
+        return redirect("private_event_payment_page", payment_id=private_payment.id)
+
+    private_payment.status = PrivateEventPayment.STATUS_PAID
+    private_payment.method = RAZORPAY_METHOD
+    private_payment.paid_at = timezone.now()
+    private_payment.gateway_provider = "Razorpay"
+    private_payment.gateway_order_id = order_id
+    private_payment.gateway_payment_id = payment_id_value
+    private_payment.verification_signature = signature
+    private_payment.verification_status = "verified"
+    private_payment.failure_reason = ""
+    private_payment.payment_meta = {
+        "razorpay_order_id": order_id,
+        "razorpay_payment_id": payment_id_value,
+    }
+    private_payment.save(
+        update_fields=[
+            "status",
+            "method",
+            "paid_at",
+            "gateway_provider",
+            "gateway_order_id",
+            "gateway_payment_id",
+            "verification_signature",
+            "verification_status",
+            "failure_reason",
+            "payment_meta",
+        ]
+    )
+    record_audit_log(
+        action="private_event_payment_success",
+        summary=f"Razorpay private event payment completed for '{private_payment.event.title}'.",
+        category="payment",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"private_payment_id": private_payment.id, "method": RAZORPAY_METHOD},
+    )
 
     guest_recipients, _invalid_guests, _normalized = parse_event_email_list(
         private_payment.event.guest_emails
@@ -2145,7 +3901,7 @@ def my_bookings(request):
 
     bookings = (
         Booking.objects.filter(user=request.user)
-        .select_related("event")
+        .select_related("event", "ticket_type")
         .order_by("event__date", "booking_date")
     )
     return render_app(
@@ -2165,26 +3921,12 @@ def download_ticket_pdf(request, booking_id):
         messages.error(request, "Ticket PDF is available only for completed paid bookings.")
         return redirect("my_bookings")
 
-    profile = get_or_create_profile(request.user)
-    if not profile.profile_image:
-        messages.error(
-            request,
-            "Profile photo is required for ticket PDF. Please upload your photo in Profile first.",
-        )
-        return redirect("profile")
-
     holder_name = (request.user.first_name or request.user.username or "").strip()
     if not holder_name:
         messages.error(request, "User name is required for ticket PDF. Please update your profile.")
         return redirect("profile")
 
-    try:
-        with profile.profile_image.open("rb") as image_file:
-            user_photo = PILImage.open(image_file).convert("RGB")
-            user_photo.load()
-    except Exception:
-        messages.error(request, "Profile photo could not be read. Please upload a valid image.")
-        return redirect("profile")
+    user_photo = load_ticket_holder_photo(request.user)
 
     ticket_token = generate_ticket_token(booking)
     scan_path = reverse("ticket_qr_scan", args=[ticket_token])
@@ -2388,15 +4130,80 @@ def cancel_booking(request, booking_id):
         messages.error(request, "Booking is already cancelled.")
         return redirect("my_bookings")
 
-    booking.status = Booking.STATUS_CANCELLED
-    booking.save(update_fields=["status"])
+    refund_amount = 0
+    refund_mode = ""
+    with transaction.atomic():
+        booking = Booking.objects.select_for_update().get(id=booking.id, user=request.user)
+        if booking.status == Booking.STATUS_CANCELLED:
+            messages.error(request, "Booking is already cancelled.")
+            return redirect("my_bookings")
+
+        payment_was_paid = booking.payment_status == Booking.PAYMENT_PAID
+        booking.status = Booking.STATUS_CANCELLED
+        update_fields = ["status"]
+
+        if payment_was_paid:
+            booking.payment_status = Booking.PAYMENT_REFUNDED
+            update_fields.append("payment_status")
+        booking.save(update_fields=update_fields)
+
+        if payment_was_paid:
+            latest_paid_payment = booking.payments.filter(status=Payment.STATUS_PAID).order_by("-paid_at", "-id").first()
+            refund_amount = calculate_refund_amount(booking)
+            refund_mode = "full" if refund_amount >= int((latest_paid_payment.amount if latest_paid_payment else 0) or 0) else "partial"
+            Payment.objects.create(
+                booking=booking,
+                amount=refund_amount,
+                method=(latest_paid_payment.method if latest_paid_payment else "Refund"),
+                status=Payment.STATUS_REFUNDED,
+                transaction_ref=generate_payment_reference("RFD"),
+                gateway_provider=(latest_paid_payment.gateway_provider if latest_paid_payment else "Eventify Local Gateway"),
+                gateway_payment_id=get_gateway_payment_id("refund"),
+                verification_status="verified",
+                failure_reason=(
+                    "Automatic full refund processed after booking cancellation."
+                    if refund_mode == "full"
+                    else "Automatic partial refund processed after booking cancellation."
+                ),
+                coupon_code=(latest_paid_payment.coupon_code if latest_paid_payment else ""),
+                discount_amount=(latest_paid_payment.discount_amount if latest_paid_payment else 0),
+                refunded_at=timezone.now(),
+            )
+
+            if booking.ticket_type_id:
+                locked_ticket_type = (
+                    TicketType.objects.select_for_update()
+                    .filter(id=booking.ticket_type_id, event_id=booking.event_id)
+                    .first()
+                )
+                if locked_ticket_type:
+                    restored_quantity = int(locked_ticket_type.available_quantity or 0) + int(booking.tickets or 0)
+                    locked_ticket_type.available_quantity = min(
+                        int(locked_ticket_type.total_quantity or restored_quantity),
+                        restored_quantity,
+                    )
+                    locked_ticket_type.save(update_fields=["available_quantity"])
+
     create_notification(
         request.user,
         "Booking Cancelled",
-        f"Your booking for '{booking.event.title}' has been cancelled.",
+        (
+            f"Your booking for '{booking.event.title}' has been cancelled and a full refund was initiated."
+            if refund_mode == "full"
+            else (
+                f"Your booking for '{booking.event.title}' has been cancelled and a partial refund was initiated."
+                if refund_mode == "partial"
+                else f"Your booking for '{booking.event.title}' has been cancelled."
+            )
+        ),
         "booking",
     )
-    messages.success(request, "Booking cancelled.")
+    if refund_mode == "full":
+        messages.success(request, f"Booking cancelled. Full refund of INR {refund_amount:,} initiated.")
+    elif refund_mode == "partial":
+        messages.success(request, f"Booking cancelled. Partial refund of INR {refund_amount:,} initiated.")
+    else:
+        messages.success(request, "Booking cancelled.")
     return redirect("my_bookings")
 
 
@@ -2419,19 +4226,50 @@ def event_history(request):
 
 
 @login_required(login_url="auth_page")
-def invoices(request):
+def payment_history(request):
     ensure_seeded()
     profile = get_or_create_profile(request.user)
     if profile.role == Profile.ROLE_ORGANIZER:
         records = (
-            Booking.objects.select_related("event", "user", "active_activity_slot", "helper_activity_slot")
-            .filter(event__created_by=request.user, payment_status=Booking.PAYMENT_PAID)
+            Payment.objects.select_related("booking", "booking__event", "booking__user", "booking__ticket_type")
+            .filter(booking__event__created_by=request.user)
+            .order_by("-paid_at", "-id")
+        )
+    else:
+        records = (
+            Payment.objects.select_related("booking", "booking__event", "booking__ticket_type")
+            .filter(booking__user=request.user)
+            .order_by("-paid_at", "-id")
+        )
+    return render_app(
+        request,
+        "core/payment_history.html",
+        "payment-history",
+        {"records": records, "mode": profile.role},
+    )
+
+
+@login_required(login_url="auth_page")
+def invoices(request):
+    ensure_seeded()
+    profile = get_or_create_profile(request.user)
+    invoice_statuses = [Booking.PAYMENT_PAID, Booking.PAYMENT_REFUNDED]
+    if profile.role == Profile.ROLE_ORGANIZER:
+        records = (
+            Booking.objects.select_related(
+                "event",
+                "user",
+                "active_activity_slot",
+                "helper_activity_slot",
+                "ticket_type",
+            )
+            .filter(event__created_by=request.user, payment_status__in=invoice_statuses)
             .order_by("-booking_date")
         )
     else:
         records = (
-            Booking.objects.select_related("event", "active_activity_slot", "helper_activity_slot")
-            .filter(user=request.user, payment_status=Booking.PAYMENT_PAID)
+            Booking.objects.select_related("event", "active_activity_slot", "helper_activity_slot", "ticket_type")
+            .filter(user=request.user, payment_status__in=invoice_statuses)
             .order_by("-booking_date")
         )
     return render_app(
@@ -2446,35 +4284,25 @@ def invoices(request):
 def download_invoice(request, booking_id):
     ensure_seeded()
     profile = get_or_create_profile(request.user)
+    invoice_statuses = [Booking.PAYMENT_PAID, Booking.PAYMENT_REFUNDED]
     if profile.role == Profile.ROLE_ORGANIZER:
         booking = get_object_or_404(
-            Booking, id=booking_id, event__created_by=request.user, payment_status=Booking.PAYMENT_PAID
+            Booking.objects.select_related("event", "user", "ticket_type"),
+            id=booking_id,
+            event__created_by=request.user,
+            payment_status__in=invoice_statuses,
         )
     else:
         booking = get_object_or_404(
-            Booking, id=booking_id, user=request.user, payment_status=Booking.PAYMENT_PAID
+            Booking.objects.select_related("event", "user", "ticket_type"),
+            id=booking_id,
+            user=request.user,
+            payment_status__in=invoice_statuses,
         )
-
-    lines = [
-        "Eventify Invoice",
-        "------------------------------",
-        f"Invoice No: {booking.invoice_no or '-'}",
-        f"Ticket ID: {booking.ticket_reference}",
-        f"Booking ID: {booking.id}",
-        f"Event: {booking.event.title}",
-        f"Event Date: {booking.event.date.strftime('%d %b %Y')}",
-        f"Location: {booking.event.location}",
-        f"Tickets: {booking.tickets}",
-        f"Amount: INR {booking.total_amount:,}",
-        f"Payment Status: {booking.payment_status}",
-        f"Generated On: {timezone.localtime().strftime('%d %b %Y, %I:%M %p')}",
-    ]
-    if profile.role == Profile.ROLE_ORGANIZER:
-        lines.insert(3, f"Customer: {booking.user.first_name or booking.user.username}")
-
-    response = HttpResponse("\n".join(lines), content_type="text/plain")
+    payment_records = list(booking.payments.order_by("-paid_at", "-id"))
+    response = HttpResponse(build_invoice_pdf(booking, payment_records), content_type="application/pdf")
     file_name = booking.invoice_no or f"invoice-{booking.id}"
-    response["Content-Disposition"] = f'attachment; filename="{file_name}.txt"'
+    response["Content-Disposition"] = f'attachment; filename="{file_name}.pdf"'
     return response
 
 
@@ -2514,13 +4342,13 @@ def profile_view(request):
 
         uploaded = request.FILES.get("profile_image")
         if uploaded:
-            ext = Path(uploaded.name).suffix.lower()
-            allowed_exts = {".jpg", ".jpeg", ".png", ".webp"}
-            if ext not in allowed_exts:
-                messages.error(request, "Only JPG, JPEG, PNG, or WEBP image is allowed.")
-                return redirect("profile")
-            if uploaded.size > 2 * 1024 * 1024:
-                messages.error(request, "Profile image size must be less than 2MB.")
+            upload_error = validate_image_upload(
+                uploaded,
+                label="Profile image",
+                max_size_bytes=2 * 1024 * 1024,
+            )
+            if upload_error:
+                messages.error(request, upload_error)
                 return redirect("profile")
 
         # Keep auth name fields normalized for consistency with username-based identity.
@@ -2539,6 +4367,14 @@ def profile_view(request):
             profile.profile_image = uploaded
             update_fields.append("profile_image")
         profile.save(update_fields=update_fields)
+        record_audit_log(
+            action="profile_updated",
+            summary="Profile updated from account page.",
+            category="account",
+            status="success",
+            request=request,
+            user=request.user,
+        )
         messages.success(request, "Profile updated successfully.")
         return redirect("profile")
 
@@ -2570,17 +4406,30 @@ def settings_password(request):
         messages.error(request, "Please fill all password fields.")
         return redirect("settings")
 
-    if len(new_password) < 6:
-        messages.error(request, "New password must be at least 6 characters.")
-        return redirect("settings")
-
     if new_password != confirm_password:
         messages.error(request, "New password and confirm password do not match.")
         return redirect("settings")
 
     if not check_password(old_password, request.user.password):
+        record_audit_log(
+            action="password_change_failed",
+            summary="Password change rejected because old password was incorrect.",
+            category="account",
+            status="failure",
+            request=request,
+            user=request.user,
+        )
         messages.error(request, "Old password is incorrect.")
         return redirect("settings")
+
+    password_error_redirect = show_password_validation_error(
+        request,
+        new_password,
+        user=request.user,
+        redirect_name="settings",
+    )
+    if password_error_redirect:
+        return password_error_redirect
 
     request.user.set_password(new_password)
     request.user.save(update_fields=["password"])
@@ -2591,6 +4440,15 @@ def settings_password(request):
         "security",
     )
     login(request, request.user)
+    initialize_secure_session(request)
+    record_audit_log(
+        action="password_changed",
+        summary="Password changed from settings.",
+        category="account",
+        status="success",
+        request=request,
+        user=request.user,
+    )
     messages.success(request, "Password changed successfully.")
     return redirect("settings")
 
@@ -2673,13 +4531,22 @@ def support_view(request):
         ):
             redirect_target = next_url
 
-        subject = (request.POST.get("subject") or "").strip()
-        message_text = (request.POST.get("message") or "").strip()
+        subject = sanitize_text_input(request.POST.get("subject"), max_length=120)
+        message_text = sanitize_text_input(request.POST.get("message"), max_length=1000)
         if not subject or not message_text:
             messages.error(request, "Please fill subject and message.")
             return redirect(redirect_target)
 
         SupportTicket.objects.create(user=request.user, subject=subject, message=message_text)
+        record_audit_log(
+            action="support_ticket_created",
+            summary="Support ticket submitted.",
+            category="account",
+            status="success",
+            request=request,
+            user=request.user,
+            metadata={"subject": subject},
+        )
         create_notification(
             request.user,
             "Support Ticket Submitted",
@@ -2704,7 +4571,12 @@ def my_events(request):
     participant_prefetch = Prefetch(
         "bookings",
         queryset=(
-            Booking.objects.select_related("user", "active_activity_slot", "helper_activity_slot")
+            Booking.objects.select_related(
+                "user",
+                "active_activity_slot",
+                "helper_activity_slot",
+                "ticket_type",
+            )
             .exclude(status=Booking.STATUS_CANCELLED)
             .order_by("-booking_date")
         ),
@@ -2712,23 +4584,31 @@ def my_events(request):
     )
     events = (
         Event.objects.filter(created_by=request.user)
+        .select_related("private_event_payment")
         .annotate(
+            ticket_types_count=Count("ticket_types", distinct=True),
             active_participants_applied=Count(
                 "bookings",
                 filter=Q(bookings__application_role=Booking.ROLE_ACTIVE_PARTICIPANT)
                 & ~Q(bookings__status=Booking.STATUS_CANCELLED),
+                distinct=True,
             ),
             helpers_applied=Count(
                 "bookings",
                 filter=Q(bookings__application_role=Booking.ROLE_HELPER_TEAM)
                 & ~Q(bookings__status=Booking.STATUS_CANCELLED),
+                distinct=True,
             ),
         )
-        .prefetch_related(participant_prefetch)
+        .prefetch_related(participant_prefetch, "ticket_types")
         .order_by("-date")
     )
     events = list(events)
     for event in events:
+        try:
+            event.private_payment = event.private_event_payment
+        except PrivateEventPayment.DoesNotExist:
+            event.private_payment = None
         for participant_booking in getattr(event, "participant_bookings", []):
             participant_booking.ticket_scan_url = reverse(
                 "ticket_qr_scan",
@@ -2756,6 +4636,7 @@ def download_event_participants_excel(request, event_id):
             "user__profile",
             "active_activity_slot",
             "helper_activity_slot",
+            "ticket_type",
         )
         .filter(event=event)
         .exclude(status=Booking.STATUS_CANCELLED)
@@ -2768,8 +4649,10 @@ def download_event_participants_excel(request, event_id):
         )
 
     if open_inline:
+        if inline_section == "attendance":
+            inline_section = "participants"
         show_participants_table = inline_section in {"all", "participants"}
-        show_attendance_table = inline_section in {"all", "attendance"}
+        show_attendance_table = False
         return render_app(
             request,
             "core/event_participants_table.html",
@@ -2882,6 +4765,7 @@ def new_event(request):
     ensure_seeded()
     if request.method == "GET":
         event_type = (request.GET.get("event_type") or "public").strip()
+        show_ticket_types = event_type != "private"
         return render_app(
             request,
             "core/new_event.html",
@@ -2892,16 +4776,18 @@ def new_event(request):
                 "event_type": event_type,
                 "active_activity_rows": build_active_activity_form_rows(),
                 "helper_activity_rows": build_helper_activity_form_rows(),
+                "show_ticket_types": show_ticket_types,
+                "ticket_type_rows": build_ticket_type_form_rows(fallback_price=0),
             },
         )
 
-    title = (request.POST.get("title") or "").strip()
-    category = (request.POST.get("category") or "").strip()
-    location = (request.POST.get("location") or "").strip()
+    title = sanitize_text_input(request.POST.get("title"), max_length=180)
+    category = sanitize_text_input(request.POST.get("category"), max_length=80)
+    location = sanitize_text_input(request.POST.get("location"), max_length=180)
     date_value = request.POST.get("date")
     time_value = build_event_time_from_post(request)
-    description = (request.POST.get("description") or "").strip()
-    attendees_usage = (request.POST.get("attendeesUsage") or "").strip()
+    description = sanitize_text_input(request.POST.get("description"))
+    attendees_usage = sanitize_text_input(request.POST.get("attendeesUsage"), max_length=220)
     image_file = request.FILES.get("imageFile")
     attendees_required = parse_required_count(request.POST.get("attendeesRequired"))
     
@@ -2953,6 +4839,7 @@ def new_event(request):
 
     active_activity_slots = []
     helper_activity_slots = []
+    ticket_type_rows = []
     if not is_private:
         active_activity_slots, active_activity_error = parse_active_activity_slots_from_post(request)
         if active_activity_error:
@@ -2962,6 +4849,12 @@ def new_event(request):
         if helper_activity_error:
             messages.error(request, helper_activity_error)
             return redirect("new_event")
+        ticket_type_rows, ticket_type_error = parse_ticket_types_from_post(request)
+        if ticket_type_error:
+            messages.error(request, ticket_type_error)
+            return redirect("new_event")
+        if not ticket_type_rows:
+            ticket_type_rows = default_single_ticket_type_payload(price)
     active_participants_required, active_participants_usage = summarize_active_activity_slots(
         active_activity_slots
     )
@@ -2975,6 +4868,10 @@ def new_event(request):
         messages.error(request, image_error)
         return redirect("new_event")
 
+    public_base_price = price
+    if ticket_type_rows:
+        public_base_price = min(item["price"] for item in ticket_type_rows)
+
     profile = get_or_create_profile(request.user)
     event_data = {
         "title": title,
@@ -2982,7 +4879,7 @@ def new_event(request):
         "location": location,
         "date": date_value,
         "time": time_value,
-        "price": private_event_amount if is_private else price,
+        "price": private_event_amount if is_private else public_base_price,
         "description": description,
         "is_private": is_private,
         "guest_emails": guest_emails,
@@ -3011,6 +4908,9 @@ def new_event(request):
                 helper_slot_sync_error = sync_event_helper_activity_slots(event, helper_activity_slots)
                 if helper_slot_sync_error:
                     raise ValueError(helper_slot_sync_error)
+                ticket_type_sync_error = sync_event_ticket_types(event, ticket_type_rows)
+                if ticket_type_sync_error:
+                    raise ValueError(ticket_type_sync_error)
     except ValueError as exc:
         messages.error(request, str(exc))
         return redirect("new_event")
@@ -3031,8 +4931,26 @@ def new_event(request):
                 "Complete payment to send invitations."
             ),
         )
+        record_audit_log(
+            action="event_created",
+            summary=f"Private event '{event.title}' created.",
+            category="event",
+            status="success",
+            request=request,
+            user=request.user,
+            metadata={"event_id": event.id, "is_private": True},
+        )
         return redirect("private_event_payment_page", payment_id=payment.id)
 
+    record_audit_log(
+        action="event_created",
+        summary=f"Event '{event.title}' created.",
+        category="event",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"event_id": event.id, "is_private": False},
+    )
     messages.success(request, "Event created successfully.")
 
     return redirect("my_events")
@@ -3050,6 +4968,7 @@ def edit_event(request, event_id):
 
     if request.method == "GET":
         start_time_value, end_time_value = split_event_time_for_picker(event.time)
+        show_ticket_types = not event.is_private
         return render_app(
             request,
             "core/new_event.html",
@@ -3061,16 +4980,18 @@ def edit_event(request, event_id):
                 "end_time_value": end_time_value,
                 "active_activity_rows": build_active_activity_form_rows(event),
                 "helper_activity_rows": build_helper_activity_form_rows(event),
+                "show_ticket_types": show_ticket_types,
+                "ticket_type_rows": build_ticket_type_form_rows(event=event, fallback_price=event.price),
             },
         )
 
-    title = (request.POST.get("title") or "").strip()
-    category = (request.POST.get("category") or "").strip()
-    location = (request.POST.get("location") or "").strip()
+    title = sanitize_text_input(request.POST.get("title"), max_length=180)
+    category = sanitize_text_input(request.POST.get("category"), max_length=80)
+    location = sanitize_text_input(request.POST.get("location"), max_length=180)
     date_value = request.POST.get("date")
     time_value = build_event_time_from_post(request)
-    description = (request.POST.get("description") or "").strip()
-    attendees_usage = (request.POST.get("attendeesUsage") or "").strip()
+    description = sanitize_text_input(request.POST.get("description"))
+    attendees_usage = sanitize_text_input(request.POST.get("attendeesUsage"), max_length=220)
     image_file = request.FILES.get("imageFile")
     attendees_required = parse_required_count(request.POST.get("attendeesRequired"))
 
@@ -3127,6 +5048,7 @@ def edit_event(request, event_id):
 
     active_activity_slots = []
     helper_activity_slots = []
+    ticket_type_rows = []
     if not is_private:
         active_activity_slots, active_activity_error = parse_active_activity_slots_from_post(request)
         if active_activity_error:
@@ -3136,12 +5058,21 @@ def edit_event(request, event_id):
         if helper_activity_error:
             messages.error(request, helper_activity_error)
             return redirect("edit_event", event_id=event.id)
+        ticket_type_rows, ticket_type_error = parse_ticket_types_from_post(request)
+        if ticket_type_error:
+            messages.error(request, ticket_type_error)
+            return redirect("edit_event", event_id=event.id)
+        if not ticket_type_rows:
+            ticket_type_rows = default_single_ticket_type_payload(price)
     active_participants_required, active_participants_usage = summarize_active_activity_slots(
         active_activity_slots
     )
     helpers_required, helpers_usage = summarize_helper_activity_slots(helper_activity_slots)
     private_event_guest_count = len(guest_email_list)
     private_event_amount = calculate_private_event_creation_amount(private_event_guest_count)
+    public_base_price = price
+    if ticket_type_rows:
+        public_base_price = min(item["price"] for item in ticket_type_rows)
 
     existing_guest_emails, _existing_invalid_guest_emails, _ = parse_event_email_list(
         event.guest_emails
@@ -3154,7 +5085,7 @@ def edit_event(request, event_id):
     event.location = location
     event.date = date_value
     event.time = time_value
-    event.price = private_event_amount if is_private else price
+    event.price = private_event_amount if is_private else public_base_price
     event.description = description
     event.is_private = is_private
     event.guest_emails = guest_emails
@@ -3208,6 +5139,12 @@ def edit_event(request, event_id):
             )
             if helper_slot_sync_error:
                 raise ValueError(helper_slot_sync_error)
+            ticket_type_sync_error = sync_event_ticket_types(
+                event,
+                [] if is_private else ticket_type_rows,
+            )
+            if ticket_type_sync_error:
+                raise ValueError(ticket_type_sync_error)
             event.save(update_fields=update_fields)
     except ValueError as exc:
         messages.error(request, str(exc))
@@ -3277,6 +5214,15 @@ def edit_event(request, event_id):
     else:
         messages.success(request, "Event updated successfully.")
 
+    record_audit_log(
+        action="event_updated",
+        summary=f"Event '{event.title}' updated.",
+        category="event",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"event_id": event.id, "is_private": event.is_private},
+    )
     return redirect("my_events")
 
 
@@ -3292,7 +5238,17 @@ def delete_event(request, event_id):
         return redirect("my_events")
 
     event_title = event.title
+    event_id_value = event.id
     event.delete()
+    record_audit_log(
+        action="event_deleted",
+        summary=f"Event '{event_title}' deleted.",
+        category="event",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"event_id": event_id_value},
+    )
     messages.success(request, f"Event '{event_title}' deleted successfully.")
     return redirect("my_events")
 
@@ -3302,7 +5258,7 @@ def organizer_bookings(request):
     ensure_seeded()
     bookings = (
         Booking.objects.filter(event__created_by=request.user)
-        .select_related("event", "user")
+        .select_related("event", "user", "ticket_type")
         .order_by("-booking_date")
     )
     return render_app(
@@ -3437,6 +5393,14 @@ def delete_account(request):
 
         user = request.user
         username = user.username
+        record_audit_log(
+            action="account_deleted",
+            summary=f"Account '{username}' deleted.",
+            category="account",
+            status="success",
+            request=request,
+            user=user,
+        )
         user.delete()
         logout(request)
         messages.success(request, f"Account '{username}' has been deleted successfully.")
@@ -3451,4 +5415,746 @@ def delete_account(request):
             "otp_pending": otp_pending,
         },
     )
+
+
+# ============================================================
+# NEW FEATURES: Admin Dashboard, Social Login, 2FA, Email Verification, Trending Events
+# ============================================================
+
+
+@admin_required
+def admin_dashboard(request):
+    """Admin dashboard showing all platform statistics."""
+    ensure_seeded()
+    
+    # Get overall statistics
+    total_users = User.objects.count()
+    total_events = Event.objects.count()
+    total_bookings = Booking.objects.count()
+    total_payments = Payment.objects.filter(status=Payment.STATUS_PAID).aggregate(
+        total=Sum("amount")
+    )["total"] or 0
+    
+    # Recent bookings
+    recent_bookings = Booking.objects.select_related(
+        "user", "event"
+    ).order_by("-booking_date")[:10]
+    
+    # Recent users
+    recent_users = Profile.objects.select_related("user").order_by("-created_at")[:10]
+    
+    # Support tickets
+    open_tickets = SupportTicket.objects.filter(
+        status=SupportTicket.STATUS_OPEN
+    ).count()
+    recent_security_events = SecurityAuditLog.objects.select_related("user").order_by("-created_at")[:10]
+    
+    stats = {
+        "total_users": total_users,
+        "total_events": total_events,
+        "total_bookings": total_bookings,
+        "total_payments": total_payments,
+        "open_tickets": open_tickets,
+    }
+    
+    return render_app(
+        request,
+        "core/admin_dashboard.html",
+        "dashboard",
+        {
+            "stats": stats,
+            "recent_bookings": recent_bookings,
+            "recent_users": recent_users,
+            "recent_security_events": recent_security_events,
+        },
+    )
+
+
+@admin_required
+def admin_events(request):
+    """Admin page to view all events."""
+    ensure_seeded()
+    events = Event.objects.select_related("created_by").order_by("-created_at")
+    return render_app(
+        request,
+        "core/admin_events.html",
+        "admin-events",
+        {"events": events},
+    )
+
+
+@admin_required
+def admin_users(request):
+    """Admin page to view all users."""
+    ensure_seeded()
+    profiles = Profile.objects.select_related("user").order_by("-created_at")
+    return render_app(
+        request,
+        "core/admin_users.html",
+        "admin-users",
+        {"profiles": profiles},
+    )
+
+
+@admin_required
+def admin_bookings(request):
+    """Admin page to view all bookings."""
+    ensure_seeded()
+    bookings = Booking.objects.select_related(
+        "user", "event"
+    ).order_by("-booking_date")
+    return render_app(
+        request,
+        "core/admin_bookings.html",
+        "admin-tickets",
+        {"bookings": bookings},
+    )
+
+
+@admin_required
+def admin_payments(request):
+    """Admin page to view all payments."""
+    ensure_seeded()
+    payments = Payment.objects.select_related(
+        "booking", "booking__user", "booking__event"
+    ).order_by("-paid_at")
+    return render_app(
+        request,
+        "core/admin_payments.html",
+        "admin-payments",
+        {"payments": payments},
+    )
+
+
+@admin_required
+def admin_support(request):
+    """Admin page to view all support tickets."""
+    ensure_seeded()
+    tickets = SupportTicket.objects.select_related("user").order_by("-created_at")
+    return render_app(
+        request,
+        "core/admin_support.html",
+        "admin-support",
+        {"tickets": tickets},
+    )
+
+
+@admin_required
+def admin_resolve_ticket(request, ticket_id):
+    """Admin action to resolve a support ticket."""
+    ensure_seeded()
+    if request.method == "POST":
+        ticket = get_object_or_404(SupportTicket, id=ticket_id)
+        ticket.status = SupportTicket.STATUS_RESOLVED
+        ticket.save(update_fields=["status"])
+        record_audit_log(
+            action="support_ticket_resolved",
+            summary=f"Support ticket #{ticket_id} resolved by admin.",
+            category="admin",
+            status="success",
+            request=request,
+            user=request.user,
+            metadata={"ticket_id": ticket_id},
+        )
+        messages.success(request, f"Ticket #{ticket_id} resolved.")
+    return redirect("admin_support")
+
+
+def social_login_google(request):
+    ensure_seeded()
+    provider = get_google_oauth_config()
+    if not oauth_provider_ready(provider):
+        return _render_social_login_setup_page(request, "Google")
+
+    redirect_uri = _oauth_redirect_uri(request, "social_login_google", "GOOGLE_OAUTH_REDIRECT_URI")
+    error = (request.GET.get("error") or "").strip()
+    if error:
+        messages.error(request, f"Google login was cancelled or failed: {error}.")
+        return redirect("auth_page")
+
+    code = (request.GET.get("code") or "").strip()
+    if not code:
+        state = generate_oauth_state()
+        request.session[_oauth_state_key("google")] = state
+        return redirect(build_google_auth_url(redirect_uri, state))
+
+    returned_state = (request.GET.get("state") or "").strip()
+    expected_state = request.session.pop(_oauth_state_key("google"), "")
+    if not expected_state or not secrets.compare_digest(expected_state, returned_state):
+        messages.error(request, "Google login state validation failed. Please try again.")
+        return redirect("auth_page")
+
+    try:
+        token_payload = exchange_google_code(code, redirect_uri)
+        access_token = (token_payload or {}).get("access_token", "").strip()
+        if not access_token:
+            raise IntegrationError("Google access token was not returned.")
+        google_profile = fetch_google_profile(access_token)
+        user, profile, created = sync_social_user(
+            "google",
+            google_profile.get("sub"),
+            google_profile.get("email"),
+            first_name=(google_profile.get("given_name") or google_profile.get("name") or "").strip(),
+            last_name=(google_profile.get("family_name") or "").strip(),
+        )
+    except (IntegrationError, ValidationError) as exc:
+        messages.error(request, f"Google login failed: {exc}")
+        return redirect("auth_page")
+
+    info_message = None
+    if created:
+        info_message = "Your Eventify account was created with Google."
+    return complete_login_after_primary_auth(
+        request,
+        user,
+        profile,
+        info_message=info_message,
+        auth_source="google",
+    )
+
+
+def social_login_github(request):
+    ensure_seeded()
+    provider = get_github_oauth_config()
+    if not oauth_provider_ready(provider):
+        return _render_social_login_setup_page(request, "GitHub")
+
+    redirect_uri = _oauth_redirect_uri(request, "social_login_github", "GITHUB_OAUTH_REDIRECT_URI")
+    error = (request.GET.get("error") or "").strip()
+    if error:
+        messages.error(request, f"GitHub login was cancelled or failed: {error}.")
+        return redirect("auth_page")
+
+    code = (request.GET.get("code") or "").strip()
+    if not code:
+        state = generate_oauth_state()
+        request.session[_oauth_state_key("github")] = state
+        return redirect(build_github_auth_url(redirect_uri, state))
+
+    returned_state = (request.GET.get("state") or "").strip()
+    expected_state = request.session.pop(_oauth_state_key("github"), "")
+    if not expected_state or not secrets.compare_digest(expected_state, returned_state):
+        messages.error(request, "GitHub login state validation failed. Please try again.")
+        return redirect("auth_page")
+
+    try:
+        token_payload = exchange_github_code(code, redirect_uri)
+        access_token = (token_payload or {}).get("access_token", "").strip()
+        if not access_token:
+            raise IntegrationError("GitHub access token was not returned.")
+        github_profile = fetch_github_profile(access_token)
+        github_emails = fetch_github_emails(access_token)
+        primary_email = next(
+            (
+                item.get("email")
+                for item in github_emails
+                if item.get("email") and item.get("verified") and item.get("primary")
+            ),
+            None,
+        )
+        if not primary_email:
+            primary_email = next(
+                (
+                    item.get("email")
+                    for item in github_emails
+                    if item.get("email") and item.get("verified")
+                ),
+                github_profile.get("email"),
+            )
+        display_name = (github_profile.get("name") or github_profile.get("login") or "").strip()
+        first_name = display_name.split()[0] if display_name else ""
+        last_name = " ".join(display_name.split()[1:]) if len(display_name.split()) > 1 else ""
+        user, profile, created = sync_social_user(
+            "github",
+            github_profile.get("id"),
+            primary_email,
+            first_name=first_name,
+            last_name=last_name,
+        )
+    except (IntegrationError, ValidationError) as exc:
+        messages.error(request, f"GitHub login failed: {exc}")
+        return redirect("auth_page")
+
+    info_message = None
+    if created:
+        info_message = "Your Eventify account was created with GitHub."
+    return complete_login_after_primary_auth(
+        request,
+        user,
+        profile,
+        info_message=info_message,
+        auth_source="github",
+    )
+
+
+@login_required(login_url="auth_page")
+def verify_email(request):
+    """Send email verification link."""
+    ensure_seeded()
+    profile = get_or_create_profile(request.user)
+    
+    if request.method == "POST":
+        if profile.email_verified:
+            messages.info(request, "Your email is already verified.")
+            return redirect("dashboard")
+        
+        # Generate verification token
+        import secrets
+        token = secrets.token_urlsafe(32)
+        profile.verification_token = token
+        profile.save(update_fields=["verification_token"])
+        
+        verification_link = request.build_absolute_uri(
+            f"/verify-email-confirm/?token={token}"
+        )
+
+        recipient = (request.user.email or "").strip()
+        if not recipient:
+            messages.error(request, "Add your email in profile before requesting verification.")
+            return redirect("profile")
+
+        from_email = (
+            (getattr(settings, "DEFAULT_FROM_EMAIL", "") or "").strip()
+            or (getattr(settings, "EMAIL_HOST_USER", "") or "").strip()
+            or "webmaster@localhost"
+        )
+        email_subject = "Eventify Email Verification"
+        email_body = "\n".join(
+            [
+                f"Hi {request.user.first_name or request.user.username},",
+                "",
+                "Verify your Eventify email by opening this link:",
+                verification_link,
+                "",
+                "If you did not request this, you can ignore this email.",
+            ]
+        )
+        try:
+            EmailMessage(
+                subject=email_subject,
+                body=email_body,
+                from_email=from_email,
+                to=[recipient],
+            ).send(fail_silently=False)
+            record_audit_log(
+                action="email_verification_requested",
+                summary="Email verification link sent.",
+                category="account",
+                status="success",
+                request=request,
+                user=request.user,
+            )
+            messages.success(request, "Verification email sent successfully.")
+        except Exception:
+            messages.warning(
+                request,
+                f"Verification email could not be sent. Demo link: {verification_link}",
+            )
+        return redirect("settings")
+    
+    return render_app(
+        request,
+        "core/verify_email.html",
+        "settings",
+        {
+            "is_email_verified": profile.email_verified,
+            "account_email": request.user.email,
+        },
+    )
+
+
+def verify_email_confirm(request):
+    """Confirm email verification with token."""
+    ensure_seeded()
+    token = request.GET.get("token", "").strip()
+    
+    if not token:
+        messages.error(request, "Invalid verification token.")
+        return redirect("home")
+    
+    profile = Profile.objects.filter(verification_token=token).first()
+    
+    if not profile:
+        messages.error(request, "Invalid or expired verification token.")
+        return redirect("home")
+    
+    profile.email_verified = True
+    profile.verification_token = ""
+    profile.save(update_fields=["email_verified", "verification_token"])
+    record_audit_log(
+        action="email_verified",
+        summary="Email verification completed.",
+        category="account",
+        status="success",
+        request=request,
+        user=profile.user,
+    )
+    
+    messages.success(request, "Email verified successfully!")
+    
+    if request.user.is_authenticated:
+        return redirect("dashboard")
+    return redirect("auth_page")
+
+
+@login_required(login_url="auth_page")
+def setup_2fa(request):
+    """Setup Two-Factor Authentication."""
+    ensure_seeded()
+    profile = get_or_create_profile(request.user)
+
+    if profile.two_factor_enabled:
+        messages.info(request, "2FA is already enabled.")
+        return redirect("settings")
+
+    return render_app(
+        request,
+        "core/setup_2fa.html",
+        "settings",
+        build_2fa_setup_context(request, profile),
+    )
+
+
+@login_required(login_url="auth_page")
+def enable_2fa(request):
+    """Enable 2FA after verification."""
+    ensure_seeded()
+    profile = get_or_create_profile(request.user)
+
+    if request.method != "POST":
+        return redirect("setup_2fa")
+
+    ensure_totp_setup_material(profile)
+    code = "".join((request.POST.get("code") or "").split())
+    if not verify_totp_code(profile.two_factor_secret, code):
+        messages.error(request, "Invalid authenticator code. Please try again.")
+        return redirect("setup_2fa")
+
+    profile.two_factor_enabled = True
+    profile.save(update_fields=["two_factor_enabled"])
+    record_audit_log(
+        action="two_factor_enabled",
+        summary="Two-factor authentication enabled.",
+        category="account",
+        status="success",
+        request=request,
+        user=request.user,
+    )
+    messages.success(request, "Two-Factor Authentication enabled.")
+    return redirect("settings")
+
+
+@login_required(login_url="auth_page")
+def disable_2fa(request):
+    """Disable Two-Factor Authentication."""
+    ensure_seeded()
+    profile = get_or_create_profile(request.user)
+    
+    if not profile.two_factor_enabled:
+        messages.info(request, "2FA is not enabled.")
+        return redirect("settings")
+    
+    if request.method == "POST":
+        # Require password to disable
+        password = request.POST.get("password", "")
+        if not check_password(password, request.user.password):
+            messages.error(request, "Incorrect password.")
+            return redirect("disable_2fa")
+        
+        profile.two_factor_enabled = False
+        profile.two_factor_secret = ""
+        profile.two_factor_backup_codes = []
+        profile.save(update_fields=[
+            "two_factor_enabled", 
+            "two_factor_secret", 
+            "two_factor_backup_codes"
+        ])
+        record_audit_log(
+            action="two_factor_disabled",
+            summary="Two-factor authentication disabled.",
+            category="account",
+            status="success",
+            request=request,
+            user=request.user,
+        )
+        messages.success(request, "Two-Factor Authentication disabled.")
+        return redirect("settings")
+    
+    return render_app(request, "core/disable_2fa.html", "settings")
+
+
+def verify_2fa(request):
+    """Verify 2FA code during login."""
+    ensure_seeded()
+    user_id = request.session.get("2fa_user_id")
+    expected_role = request.session.get("2fa_expected_role")
+    if not user_id:
+        messages.error(request, "2FA session has expired. Please login again.")
+        return redirect("auth_page")
+
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        request.session.pop("2fa_user_id", None)
+        request.session.pop("2fa_expected_role", None)
+        messages.error(request, "2FA user not found. Please login again.")
+        return redirect("auth_page")
+
+    profile = get_or_create_profile(user)
+    if expected_role and profile.role != expected_role:
+        request.session.pop("2fa_user_id", None)
+        request.session.pop("2fa_expected_role", None)
+        messages.error(request, "Role mismatch detected. Please login again.")
+        return redirect("auth_page")
+
+    if request.method == "GET":
+        return render(
+            request,
+            "core/verify_2fa.html",
+            {
+                "backup_code_count": len(profile.two_factor_backup_codes or []),
+            },
+        )
+
+    code = "".join((request.POST.get("code") or "").split())
+    if not code:
+        messages.error(request, "Enter a 2FA code or backup code.")
+        return redirect("verify_2fa")
+
+    verified = False
+    if profile.two_factor_secret and verify_totp_code(profile.two_factor_secret, code):
+        verified = True
+    else:
+        backup_code = code.upper()
+        active_backup_codes = list(profile.two_factor_backup_codes or [])
+        if backup_code in active_backup_codes:
+            active_backup_codes.remove(backup_code)
+            profile.two_factor_backup_codes = active_backup_codes
+            profile.save(update_fields=["two_factor_backup_codes"])
+            verified = True
+
+    if not verified:
+        record_audit_log(
+            action="two_factor_failed",
+            summary="Invalid two-factor verification code.",
+            category="auth",
+            status="failure",
+            request=request,
+            user=user,
+        )
+        messages.error(request, "Invalid verification code.")
+        return redirect("verify_2fa")
+
+    login(request, user)
+    initialize_secure_session(request)
+    auth_source = request.session.get("2fa_auth_source", "password")
+    clear_pending_2fa_session(request)
+    record_audit_log(
+        action="login_success",
+        summary=f"Successful {auth_source} login after 2FA verification.",
+        category="auth",
+        status="success",
+        request=request,
+        user=user,
+        metadata={"auth_source": auth_source, "role": profile.role, "two_factor": True},
+    )
+    messages.success(request, "Login successful.")
+    return redirect("dashboard")
+
+
+# ============================================================
+# Event Schedule Management Views
+# ============================================================
+
+
+@role_required(Profile.ROLE_ORGANIZER)
+def event_schedule_add(request, event_id):
+    """Add a schedule item to an event."""
+    ensure_seeded()
+    event = get_object_or_404(Event, id=event_id, created_by=request.user)
+    
+    if request.method == "POST":
+        title = sanitize_text_input(request.POST.get("title"), max_length=180)
+        description = sanitize_text_input(request.POST.get("description"))
+        start_time = request.POST.get("start_time", "").strip()
+        end_time = request.POST.get("end_time", "").strip()
+        speaker_name = sanitize_text_input(request.POST.get("speaker_name"), max_length=120)
+        location = sanitize_text_input(request.POST.get("location"), max_length=180)
+        
+        if not title or not start_time or not end_time:
+            messages.error(request, "Please fill required fields.")
+            return redirect("event_schedule_add", event_id=event.id)
+        
+        EventSchedule.objects.create(
+            event=event,
+            title=title,
+            description=description,
+            start_time=start_time,
+            end_time=end_time,
+            speaker_name=speaker_name,
+            location=location,
+        )
+        record_audit_log(
+            action="event_schedule_added",
+            summary=f"Schedule item added to '{event.title}'.",
+            category="event",
+            status="success",
+            request=request,
+            user=request.user,
+            metadata={"event_id": event.id},
+        )
+        
+        messages.success(request, "Schedule item added.")
+        return redirect("event_detail", event_id=event.id)
+    
+    return render_app(
+        request,
+        "core/event_schedule_form.html",
+        "my-events",
+        {"event": event, "action": "add"},
+    )
+
+
+@role_required(Profile.ROLE_ORGANIZER)
+def event_schedule_edit(request, schedule_id):
+    """Edit a schedule item."""
+    ensure_seeded()
+    schedule = get_object_or_404(
+        EventSchedule, 
+        id=schedule_id, 
+        event__created_by=request.user
+    )
+    
+    if request.method == "POST":
+        schedule.title = sanitize_text_input(request.POST.get("title"), max_length=180)
+        schedule.description = sanitize_text_input(request.POST.get("description"))
+        schedule.start_time = request.POST.get("start_time", "").strip()
+        schedule.end_time = request.POST.get("end_time", "").strip()
+        schedule.speaker_name = sanitize_text_input(request.POST.get("speaker_name"), max_length=120)
+        schedule.location = sanitize_text_input(request.POST.get("location"), max_length=180)
+        schedule.save()
+        record_audit_log(
+            action="event_schedule_updated",
+            summary=f"Schedule item updated for '{schedule.event.title}'.",
+            category="event",
+            status="success",
+            request=request,
+            user=request.user,
+            metadata={"event_id": schedule.event.id, "schedule_id": schedule.id},
+        )
+        
+        messages.success(request, "Schedule updated.")
+        return redirect("event_detail", event_id=schedule.event.id)
+    
+    return render_app(
+        request,
+        "core/event_schedule_form.html",
+        "my-events",
+        {"schedule": schedule, "event": schedule.event, "action": "edit"},
+    )
+
+
+@role_required(Profile.ROLE_ORGANIZER)
+def event_schedule_delete(request, schedule_id):
+    """Delete a schedule item."""
+    ensure_seeded()
+    schedule = get_object_or_404(
+        EventSchedule,
+        id=schedule_id,
+        event__created_by=request.user
+    )
+    event_id = schedule.event.id
+    if request.method != "POST":
+        return redirect("event_detail", event_id=event_id)
+    record_audit_log(
+        action="event_schedule_deleted",
+        summary=f"Schedule item deleted from '{schedule.event.title}'.",
+        category="event",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"event_id": event_id, "schedule_id": schedule.id},
+    )
+    schedule.delete()
+    messages.success(request, "Schedule item deleted.")
+    return redirect("event_detail", event_id=event_id)
+
+
+# ============================================================
+# Event Gallery Management Views
+# ============================================================
+
+
+@role_required(Profile.ROLE_ORGANIZER)
+def event_gallery_add(request, event_id):
+    """Add gallery images to an event."""
+    ensure_seeded()
+    event = get_object_or_404(Event, id=event_id, created_by=request.user)
+    
+    if request.method == "POST":
+        images = request.FILES.getlist("images")
+        caption = sanitize_text_input(request.POST.get("caption"), max_length=255)
+        
+        if not images:
+            messages.error(request, "Please select at least one image.")
+            return redirect("event_gallery_add", event_id=event.id)
+        
+        for image in images:
+            upload_error = validate_image_upload(
+                image,
+                label="Gallery image",
+                max_size_bytes=5 * 1024 * 1024,
+            )
+            if upload_error:
+                messages.error(request, upload_error)
+                return redirect("event_gallery_add", event_id=event.id)
+            EventGallery.objects.create(
+                event=event,
+                image=image,
+                caption=caption,
+            )
+        record_audit_log(
+            action="event_gallery_uploaded",
+            summary=f"Gallery images uploaded for '{event.title}'.",
+            category="event",
+            status="success",
+            request=request,
+            user=request.user,
+            metadata={"event_id": event.id, "image_count": len(images)},
+        )
+        
+        messages.success(request, f"{len(images)} image(s) added to gallery.")
+        return redirect("event_detail", event_id=event.id)
+    
+    return render_app(
+        request,
+        "core/event_gallery_form.html",
+        "my-events",
+        {"event": event},
+    )
+
+
+@role_required(Profile.ROLE_ORGANIZER)
+def event_gallery_delete(request, gallery_id):
+    """Delete a gallery image."""
+    ensure_seeded()
+    gallery = get_object_or_404(
+        EventGallery,
+        id=gallery_id,
+        event__created_by=request.user
+    )
+    event_id = gallery.event.id
+    if request.method != "POST":
+        return redirect("event_detail", event_id=event_id)
+    record_audit_log(
+        action="event_gallery_deleted",
+        summary=f"Gallery image deleted from '{gallery.event.title}'.",
+        category="event",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"event_id": event_id, "gallery_id": gallery.id},
+    )
+    gallery.delete()
+    messages.success(request, "Gallery image deleted.")
+    return redirect("event_detail", event_id=event_id)
 

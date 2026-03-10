@@ -1,3 +1,9 @@
+"""
+API Views - REST API endpoints jo mobile app ya external services use karte hain.
+Yahan JSON responses return hote hain, HTML nahi.
+Example: Login, Registration, Events list, etc.
+"""
+
 import hashlib
 import json
 from datetime import timedelta
@@ -7,15 +13,29 @@ from django.conf import settings
 from django.contrib.auth import authenticate, login
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.http import JsonResponse
 from django.utils import timezone
 
 from .models import Event, OTPRequest, Profile
-from .services import create_notification, generate_otp
+from .security_controls import (
+    clear_failed_logins,
+    format_lockout_message,
+    get_login_lockout,
+    initialize_secure_session,
+    record_audit_log,
+    record_failed_login,
+    sanitize_text_input,
+    validate_user_password,
+)
+from .services import create_notification, generate_otp, get_trending_events
 
 
 def _json_error(message: str, status: int = 400):
+    """
+    Helper function jo JSON error response return karta hai.
+    """
     return JsonResponse({"ok": False, "error": message}, status=status)
 
 
@@ -131,15 +151,82 @@ def api_login(request):
     if not role or not contact or not password:
         return _json_error("role, contact and password are required.", status=400)
 
+    locked_state, remaining_seconds = get_login_lockout(role, contact)
+    if locked_state:
+        record_audit_log(
+            action="api_login_blocked",
+            summary="Blocked API login attempt due to temporary lockout.",
+            category="auth",
+            status="failure",
+            request=request,
+            actor_contact=contact,
+            metadata={"role": role, "remaining_seconds": remaining_seconds},
+        )
+        return _json_error(format_lockout_message(remaining_seconds), status=429)
+
     profile = _find_profile_by_contact_role(contact, role)
     if not profile:
+        throttle = record_failed_login(role, contact)
+        remaining = 0
+        if throttle and throttle.locked_until and throttle.locked_until > timezone.now():
+            remaining = int((throttle.locked_until - timezone.now()).total_seconds())
+        record_audit_log(
+            action="api_login_failed",
+            summary="Failed API login attempt for unknown account or role.",
+            category="auth",
+            status="failure",
+            request=request,
+            actor_contact=contact,
+            metadata={"role": role, "locked": bool(remaining)},
+        )
+        if remaining:
+            return _json_error(format_lockout_message(remaining), status=429)
         return _json_error("Invalid credentials for selected role.", status=401)
 
     user = authenticate(request, username=profile.user.username, password=password)
     if not user:
+        throttle = record_failed_login(role, contact)
+        remaining = 0
+        if throttle and throttle.locked_until and throttle.locked_until > timezone.now():
+            remaining = int((throttle.locked_until - timezone.now()).total_seconds())
+        record_audit_log(
+            action="api_login_failed",
+            summary="Failed API login attempt due to invalid password.",
+            category="auth",
+            status="failure",
+            request=request,
+            user=profile.user,
+            actor_contact=contact,
+            metadata={"role": role, "locked": bool(remaining)},
+        )
+        if remaining:
+            return _json_error(format_lockout_message(remaining), status=429)
         return _json_error("Invalid credentials for selected role.", status=401)
 
+    if profile.two_factor_enabled:
+        record_audit_log(
+            action="api_login_rejected_2fa",
+            summary="API login rejected because 2FA is enabled on the account.",
+            category="auth",
+            status="failure",
+            request=request,
+            user=user,
+            metadata={"role": role},
+        )
+        return _json_error("2FA-enabled accounts must complete login through the web 2FA flow.", status=403)
+
+    clear_failed_logins(role, contact)
     login(request, user)
+    initialize_secure_session(request)
+    record_audit_log(
+        action="api_login_success",
+        summary="Successful API login.",
+        category="auth",
+        status="success",
+        request=request,
+        user=user,
+        metadata={"role": profile.role},
+    )
     return JsonResponse(
         {
             "ok": True,
@@ -164,7 +251,7 @@ def api_register_send_otp(request):
         return _json_error(str(exc), status=400)
 
     role = _value(payload, "role").strip()
-    name = _value(payload, "name").strip()
+    name = sanitize_text_input(_value(payload, "name"), max_length=120)
     contact = _value(payload, "contact").strip().lower()
     password = _value(payload, "password")
     confirm_password = _value(payload, "confirmPassword")
@@ -175,8 +262,10 @@ def api_register_send_otp(request):
     if password != confirm_password:
         return _json_error("Password and confirm password do not match.", status=400)
 
-    if len(password) < 6:
-        return _json_error("Password must be at least 6 characters.", status=400)
+    try:
+        validate_user_password(password)
+    except ValidationError as exc:
+        return _json_error(" ".join(exc.messages), status=400)
 
     if Profile.objects.filter(contact=contact, role=role).exists():
         return _json_error(
@@ -203,6 +292,16 @@ def api_register_send_otp(request):
     }
     if settings.DEBUG:
         response_payload["otp_preview"] = otp_value
+
+    record_audit_log(
+        action="api_registration_otp_requested",
+        summary="Registration OTP requested through API.",
+        category="account",
+        status="info",
+        request=request,
+        actor_contact=contact,
+        metadata={"role": role},
+    )
 
     return JsonResponse(response_payload, status=201)
 
@@ -267,6 +366,16 @@ def api_register_verify_otp(request):
     otp_request.is_used = True
     otp_request.save(update_fields=["is_used"])
     login(request, user)
+    initialize_secure_session(request)
+    record_audit_log(
+        action="api_account_registered",
+        summary="Account created through API OTP verification.",
+        category="account",
+        status="success",
+        request=request,
+        user=user,
+        metadata={"role": profile.role},
+    )
 
     return JsonResponse(
         {
@@ -319,5 +428,32 @@ def api_events(request):
             "count": events.count(),
             "categories": categories,
             "events": [_serialize_event(event) for event in events],
+        }
+    )
+
+
+def api_trending_events(request):
+    if request.method != "GET":
+        return _json_error("Method not allowed.", status=405)
+
+    try:
+        limit = int(request.GET.get("limit") or 6)
+    except (TypeError, ValueError):
+        limit = 6
+    limit = max(1, min(limit, 24))
+
+    selected_category = (request.GET.get("category") or "").strip().lower()
+    trending = get_trending_events(limit=max(limit, 12))
+    if selected_category:
+        trending = [
+            item for item in trending if selected_category in (item.category or "").strip().lower()
+        ]
+    trending = list(trending)[:limit]
+
+    return JsonResponse(
+        {
+            "ok": True,
+            "count": len(trending),
+            "events": [_serialize_event(event) for event in trending],
         }
     )

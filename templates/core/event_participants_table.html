@@ -75,58 +75,5 @@
       </div>
     {% endif %}
 
-    {% if show_attendance_table %}
-      <div class="attendance-inline-section">
-        <div class="card-head">
-          <h3>Attendance List</h3>
-          <div class="action-row">
-            <a href="{% url 'download_event_participants_excel' event.id %}?open=1&amp;section=attendance" class="small-btn">Open File</a>
-            <a href="{% url 'download_event_participants_excel' event.id %}?section=attendance" class="small-btn">Download Excel</a>
-          </div>
-        </div>
-        <div class="table-wrap participants-table-wrap">
-          <table class="mobile-data-table participants-panel-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Ticket ID</th>
-                <th>Attendance</th>
-                <th>Attendance Time</th>
-                <th>Open</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for booking in participants %}
-                <tr>
-                  <td data-label="Name">{{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}</td>
-                  <td data-label="Ticket ID">{{ booking.ticket_reference }}</td>
-                  <td data-label="Attendance">
-                    {% if booking.attendance_marked_at %}
-                      Present
-                    {% else %}
-                      Pending
-                    {% endif %}
-                  </td>
-                  <td data-label="Attendance Time">
-                    {% if booking.attendance_marked_at %}
-                      {{ booking.attendance_marked_at|date:"d M Y, h:i A" }}
-                    {% else %}
-                      -
-                    {% endif %}
-                  </td>
-                  <td data-label="Open">
-                    <a href="{{ booking.ticket_scan_url }}" class="small-btn">Open</a>
-                  </td>
-                </tr>
-              {% empty %}
-                <tr class="empty-row">
-                  <td colspan="5" class="empty-cell">No attendance records found.</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    {% endif %}
   </section>
 {% endblock %}

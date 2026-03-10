@@ -13,28 +13,192 @@
       <p><strong>Event:</strong> {{ booking.event.title }}</p>
       <p><strong>Date:</strong> {{ booking.event.date|date_human }} | {{ booking.event.time }}</p>
       <p><strong>Location:</strong> {{ booking.event.location }}</p>
+      <p><strong>Ticket Type:</strong> {{ booking.ticket_type.name|default:'Standard' }}</p>
       <p><strong>Tickets:</strong> {{ booking.tickets }}</p>
       <p><strong>Total Amount:</strong> {{ booking.total_amount|money }}</p>
+      <p><strong>Booking Status:</strong> {{ booking.status|title }}</p>
+      <p><strong>Payment Status:</strong> {{ booking.payment_status|title }}</p>
     </div>
 
     <div class="card">
-      <h2>Choose Payment Method</h2>
-      <form action="{% url 'payment_pay' booking.id %}" method="post">
-        {% csrf_token %}
-        <label class="radio-row">
-          <input type="radio" name="method" value="UPI" required />
-          <span>UPI</span>
-        </label>
-        <label class="radio-row">
-          <input type="radio" name="method" value="Card" required />
-          <span>Credit/Debit Card</span>
-        </label>
-        <label class="radio-row">
-          <input type="radio" name="method" value="Net Banking" required />
-          <span>Net Banking</span>
-        </label>
-        <button type="submit" class="primary-btn">Pay {{ booking.total_amount|money }}</button>
-      </form>
+      <h2>{% if razorpay_enabled %}Secure Checkout{% else %}Choose Payment Method{% endif %}</h2>
+
+      {% if razorpay_enabled %}
+        <p class="muted">This booking uses Razorpay checkout for verified online payments.</p>
+        <form action="{% url 'payment_pay' booking.id %}" method="post">
+          {% csrf_token %}
+          <label for="payment-promo-code">Promo Code</label>
+          <input id="payment-promo-code" type="text" name="promoCode" maxlength="40" placeholder="WELCOME10" />
+          <div class="inline-stack">
+            <span class="muted">You will be redirected to Razorpay's secure checkout window.</span>
+          </div>
+          <button type="submit" class="primary-btn">Continue to Razorpay</button>
+        </form>
+      {% else %}
+        <p class="muted">Local gateway flow supports UPI, cards, net banking and wallets.</p>
+        <form action="{% url 'payment_pay' booking.id %}" method="post">
+          {% csrf_token %}
+          <div class="payment-method-selector-grid">
+            {% for payment_method in payment_methods %}
+              <label class="radio-row payment-method-option{% if forloop.first %} is-active{% endif %}">
+                <input type="radio" name="method" value="{{ payment_method }}" {% if forloop.first %}checked{% endif %} required />
+                <span>{{ payment_method }}</span>
+              </label>
+            {% endfor %}
+          </div>
+
+          <div class="payment-method-panel" data-payment-panel="UPI">
+            <div class="payment-method-panel-head">
+              <h3>UPI Details</h3>
+              <p class="muted">UPI choose karne par sirf yahi details bharni hongi.</p>
+            </div>
+            <label for="payment-upi-id">UPI ID</label>
+            <input id="payment-upi-id" type="text" name="upiId" maxlength="120" placeholder="example@bank" data-payment-required />
+          </div>
+
+          <div class="payment-method-panel" data-payment-panel="Card" hidden>
+            <div class="payment-method-panel-head">
+              <h3>Card Details</h3>
+              <p class="muted">Card payment ke liye card holder, number, expiry aur CVV enter karein.</p>
+            </div>
+            <label for="payment-card-holder-name">Card Holder Name</label>
+            <input id="payment-card-holder-name" type="text" name="cardHolderName" maxlength="120" placeholder="Name on card" data-payment-required />
+
+            <label for="payment-card-number">Card Number</label>
+            <input id="payment-card-number" type="text" name="cardNumber" maxlength="23" inputmode="numeric" placeholder="1234 5678 9012 3456" data-payment-required />
+
+            <div class="payment-method-inline-grid">
+              <div>
+                <label for="payment-card-expiry">Expiry</label>
+                <input id="payment-card-expiry" type="text" name="cardExpiry" maxlength="7" placeholder="MM/YY" data-payment-required />
+              </div>
+              <div>
+                <label for="payment-card-cvv">CVV</label>
+                <input id="payment-card-cvv" type="password" name="cardCvv" maxlength="4" inputmode="numeric" placeholder="123" data-payment-required />
+              </div>
+            </div>
+          </div>
+
+          <div class="payment-method-panel" data-payment-panel="Net Banking" hidden>
+            <div class="payment-method-panel-head">
+              <h3>Net Banking Details</h3>
+              <p class="muted">Net Banking select karne par bank, account holder aur account number dein.</p>
+            </div>
+            <label for="payment-bank-name">Bank Name</label>
+            <input id="payment-bank-name" type="text" name="bankName" maxlength="120" placeholder="Your bank name" data-payment-required />
+
+            <label for="payment-account-holder-name">Account Holder Name</label>
+            <input id="payment-account-holder-name" type="text" name="accountHolderName" maxlength="120" placeholder="Account holder name" data-payment-required />
+
+            <label for="payment-account-number">Account Number</label>
+            <input id="payment-account-number" type="text" name="accountNumber" maxlength="18" inputmode="numeric" placeholder="Account number" data-payment-required />
+          </div>
+
+          <div class="payment-method-panel" data-payment-panel="Wallet" hidden>
+            <div class="payment-method-panel-head">
+              <h3>Wallet Details</h3>
+              <p class="muted">Wallet payment ke liye provider aur linked mobile number chahiye.</p>
+            </div>
+            <label for="payment-wallet-provider">Wallet Provider</label>
+            <select id="payment-wallet-provider" name="walletProvider" data-payment-required>
+              <option value="">Select wallet</option>
+              <option value="Paytm">Paytm</option>
+              <option value="PhonePe Wallet">PhonePe Wallet</option>
+              <option value="Amazon Pay">Amazon Pay</option>
+              <option value="Mobikwik">Mobikwik</option>
+              <option value="Freecharge">Freecharge</option>
+            </select>
+
+            <label for="payment-wallet-mobile">Wallet Mobile Number</label>
+            <input id="payment-wallet-mobile" type="text" name="walletMobile" maxlength="12" inputmode="numeric" placeholder="Wallet mobile number" data-payment-required />
+          </div>
+
+          <label for="payment-promo-code">Promo Code</label>
+          <input id="payment-promo-code" type="text" name="promoCode" maxlength="40" placeholder="WELCOME10" />
+
+          <div class="inline-stack">
+            <span class="muted">Method-specific details are verified on the server. CVV is validated but not stored.</span>
+          </div>
+          <button type="submit" class="primary-btn">Pay {{ booking.total_amount|money }}</button>
+        </form>
+      {% endif %}
     </div>
   </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Recent Payment Activity</h2>
+      <a href="{% url 'payment_history' %}">View Full History</a>
+    </div>
+    <div class="table-wrap">
+      <table class="mobile-data-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Method</th>
+            <th>Status</th>
+            <th>Amount</th>
+            <th>Transaction ID</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in recent_payments %}
+            <tr>
+              <td data-label="Date">
+                {% if item.status == 'refunded' and item.refunded_at %}
+                  {{ item.refunded_at|datetime_human }}
+                {% else %}
+                  {{ item.paid_at|datetime_human }}
+                {% endif %}
+              </td>
+              <td data-label="Method">{{ item.method }}</td>
+              <td data-label="Status"><span class="badge {{ item.status|badge_class }}">{{ item.status }}</span></td>
+              <td data-label="Amount">{{ item.amount|money }}</td>
+              <td data-label="Transaction ID">{{ item.transaction_ref|default:'-' }}</td>
+            </tr>
+          {% empty %}
+            <tr class="empty-row"><td colspan="5" class="empty-cell">No payment attempts yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {% if not razorpay_enabled %}
+    <script>
+      (function () {
+        var methodInputs = document.querySelectorAll('input[name="method"]');
+        var panels = document.querySelectorAll('[data-payment-panel]');
+        var methodOptions = document.querySelectorAll('.payment-method-option');
+        if (!methodInputs.length || !panels.length) return;
+
+        function syncPanels() {
+          var activeMethod = "UPI";
+          methodInputs.forEach(function (input) {
+            if (input.checked) activeMethod = input.value;
+          });
+
+          methodOptions.forEach(function (option) {
+            var input = option.querySelector('input[name="method"]');
+            option.classList.toggle("is-active", !!input && input.checked);
+          });
+
+          panels.forEach(function (panel) {
+            var isActive = panel.getAttribute("data-payment-panel") === activeMethod;
+            panel.hidden = !isActive;
+            panel.querySelectorAll("input, select, textarea").forEach(function (field) {
+              var shouldRequire = field.hasAttribute("data-payment-required");
+              field.disabled = !isActive;
+              field.required = isActive && shouldRequire;
+            });
+          });
+        }
+
+        methodInputs.forEach(function (input) {
+          input.addEventListener("change", syncPanels);
+        });
+        syncPanels();
+      })();
+    </script>
+  {% endif %}
 {% endblock %}

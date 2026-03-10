@@ -16,13 +16,17 @@
       <div>
         <p><strong>Event:</strong> {{ booking.event.title }}</p>
         <p><strong>Date:</strong> {{ booking.event.date|date_human }} | {{ booking.event.time }}</p>
+        <p><strong>Ticket Type:</strong> {{ booking.ticket_type.name|default:'Standard' }}</p>
+        <p><strong>Tickets:</strong> {{ booking.tickets }}</p>
         <p><strong>Total Paid:</strong> {{ booking.total_amount|money }}</p>
       </div>
     </div>
 
     <div class="success-actions">
       <a href="{% url 'my_bookings' %}" class="primary-btn">Go to My Bookings</a>
+      <a href="{% url 'download_ticket_pdf' booking.id %}" class="secondary-btn">Download Ticket</a>
       <a href="{% url 'invoices' %}" class="secondary-btn">View Invoices</a>
+      <a href="{% url 'payment_history' %}" class="secondary-btn">Payment History</a>
     </div>
   </section>
 {% endblock %}

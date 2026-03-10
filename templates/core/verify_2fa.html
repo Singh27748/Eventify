@@ -1,0 +1,28 @@
+{% extends "core/base_auth.html" %}
+{% block title %}Verify 2FA | Eventify{% endblock %}
+{% block content %}
+  <div class="auth-page">
+    <div class="auth-overlay"></div>
+    <div class="auth-card">
+      <div class="auth-brand">
+        <h1>Two-Factor Verification</h1>
+        <p>Enter the 6-digit TOTP code from your authenticator app or use a backup code.</p>
+      </div>
+
+      {% if messages %}
+        {% for message in messages %}
+          <div class="flash flash-{{ message.tags }}" data-auto-dismiss="true">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+
+      <form method="post">
+        {% csrf_token %}
+        <label for="verify-2fa-code">Authenticator Code or Backup Code</label>
+        <input id="verify-2fa-code" type="text" name="code" placeholder="123456 or ABCD1234" required />
+        <button type="submit" class="primary-btn">Verify and Login</button>
+      </form>
+      <p class="muted" style="margin-top: 10px;">Available backup codes: {{ backup_code_count }}</p>
+      <a href="{% url 'auth_page' %}?tab=login" class="inline-link">Back to Login</a>
+    </div>
+  </div>
+{% endblock %}

@@ -1,0 +1,74 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Secure Checkout | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>{{ checkout_title }}</h1>
+    <p>{{ checkout_description }}</p>
+  </section>
+
+  <section class="card">
+    <h2>Razorpay Checkout</h2>
+    <p><strong>Amount:</strong> {{ checkout_amount|money }}</p>
+    <p class="muted">A secure Razorpay modal will open automatically. If it does not, use the button below.</p>
+
+    <form id="razorpay-verify-form" action="{{ verify_url }}" method="post">
+      {% csrf_token %}
+      <input type="hidden" name="contextToken" value="{{ context_token }}" />
+      <input type="hidden" name="razorpay_payment_id" />
+      <input type="hidden" name="razorpay_order_id" />
+      <input type="hidden" name="razorpay_signature" />
+    </form>
+
+    <div class="action-row" style="margin-top: 16px;">
+      <button type="button" id="launch-razorpay" class="primary-btn">Pay Securely</button>
+      <a href="{{ cancel_url }}" class="small-btn">Cancel</a>
+    </div>
+  </section>
+{% endblock %}
+{% block extra_scripts %}
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <script>
+    (function () {
+      var verifyForm = document.getElementById("razorpay-verify-form");
+      var launchButton = document.getElementById("launch-razorpay");
+      if (!verifyForm || !launchButton || typeof Razorpay === "undefined") {
+        return;
+      }
+
+      var options = {
+        key: "{{ razorpay_key_id|escapejs }}",
+        order_id: "{{ razorpay_order_id|escapejs }}",
+        name: "Eventify",
+        description: "{{ checkout_description|escapejs }}",
+        handler: function (response) {
+          verifyForm.querySelector('input[name="razorpay_payment_id"]').value = response.razorpay_payment_id || "";
+          verifyForm.querySelector('input[name="razorpay_order_id"]').value = response.razorpay_order_id || "";
+          verifyForm.querySelector('input[name="razorpay_signature"]').value = response.razorpay_signature || "";
+          verifyForm.submit();
+        },
+        modal: {
+          ondismiss: function () {
+            window.location.href = "{{ cancel_url|escapejs }}";
+          }
+        },
+        prefill: {
+          name: "{{ prefill_name|default:''|escapejs }}",
+          email: "{{ prefill_email|default:''|escapejs }}",
+          contact: "{{ prefill_contact|default:''|escapejs }}"
+        },
+        theme: {
+          color: "#2563d8"
+        }
+      };
+
+      var razorpay = new Razorpay(options);
+      launchButton.addEventListener("click", function () {
+        razorpay.open();
+      });
+      window.setTimeout(function () {
+        launchButton.click();
+      }, 250);
+    })();
+  </script>
+{% endblock %}

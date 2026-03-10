@@ -4,7 +4,7 @@
 {% block content %}
   <section class="page-head">
     <h1>Invoices</h1>
-    <p>{% if mode == 'organizer' %}Paid bookings for your events.{% else %}Booking invoices and payment receipts.{% endif %}</p>
+    <p>{% if mode == 'organizer' %}Paid and refunded bookings for your events.{% else %}Booking invoices and payment receipts.{% endif %}</p>
   </section>
 
   <section class="card">
@@ -14,6 +14,7 @@
           <tr>
             <th>Invoice No</th>
             <th>Event</th>
+            <th>Ticket Type</th>
             {% if mode == 'organizer' %}<th>Customer</th>{% endif %}
             <th>Date</th>
             <th>Amount</th>
@@ -26,6 +27,7 @@
             <tr>
               <td data-label="Invoice No">{{ item.invoice_no|default:'-' }}</td>
               <td data-label="Event">{{ item.event.title }}</td>
+              <td data-label="Ticket Type">{{ item.ticket_type.name|default:'Standard' }}</td>
               {% if mode == 'organizer' %}<td data-label="Customer">{{ item.user.first_name|default:item.user.username }}</td>{% endif %}
               <td data-label="Date">{{ item.event.date|date_human }}</td>
               <td data-label="Amount">{{ item.total_amount|money }}</td>
@@ -33,7 +35,7 @@
               <td data-label="Action"><a href="{% url 'download_invoice' item.id %}" class="small-btn">Download</a></td>
             </tr>
           {% empty %}
-            <tr class="empty-row"><td colspan="{% if mode == 'organizer' %}7{% else %}6{% endif %}" class="empty-cell">No invoices found.</td></tr>
+            <tr class="empty-row"><td colspan="{% if mode == 'organizer' %}8{% else %}7{% endif %}" class="empty-cell">No invoices found.</td></tr>
           {% endfor %}
         </tbody>
       </table>

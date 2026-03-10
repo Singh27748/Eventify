@@ -36,6 +36,7 @@
             <select name="role" required>
               <option value="user">User</option>
               <option value="organizer">Organizer</option>
+              <option value="admin">Admin</option>
             </select>
 
             <label>Email or Phone</label>
@@ -43,9 +44,14 @@
 
             <label>Password</label>
             <input name="password" type="password" placeholder="Enter password" required />
+            <p class="muted">After repeated failed attempts, login is temporarily locked for your account.</p>
 
             <button type="submit" class="primary-btn">Login</button>
           </form>
+          <div class="inline-stack" style="margin-top: 12px;">
+            <a href="{% url 'social_login_google' %}" class="small-btn" style="width: 100%; text-align: center;">Continue with Google</a>
+            <a href="{% url 'social_login_github' %}" class="small-btn" style="width: 100%; text-align: center;">Continue with GitHub</a>
+          </div>
           <a href="{% url 'forgot_password' %}" class="inline-link">Forgot password?</a>
         </section>
 
@@ -67,6 +73,7 @@
 
             <label>Password</label>
             <input name="password" type="password" placeholder="Create password" required />
+            <p class="muted">Use at least 10 characters with uppercase, lowercase, number, and special character.</p>
 
             <label>Confirm Password</label>
             <input name="confirmPassword" type="password" placeholder="Confirm password" required />
@@ -79,6 +86,7 @@
       <div class="auth-demo">
         <p><strong>Demo User:</strong> john@example.com / password123</p>
         <p><strong>Demo Organizer:</strong> organizer@example.com / organizer123</p>
+        <p><strong>Demo Admin:</strong> admin@example.com / admin123</p>
       </div>
     </div>
   </div>

@@ -13,8 +13,8 @@
     />
     <link rel="stylesheet" href="{% static 'css/style.css' %}" />
   </head>
-  <body{% if current_profile.dark_mode %} class="theme-dark"{% endif %}>
-    <div class="app-shell">
+  <body{% if current_profile.dark_mode or current_profile.role == 'admin' %} class="{% if current_profile.dark_mode %}theme-dark{% endif %}{% if current_profile.dark_mode and current_profile.role == 'admin' %} {% endif %}{% if current_profile.role == 'admin' %}admin-mode{% endif %}"{% endif %}>
+    <div class="app-shell{% if current_profile.role == 'admin' %} admin-shell{% endif %}">
       <header class="top-nav">
         <button class="menu-toggle" type="button" data-toggle-sidebar aria-label="Toggle menu">
           &#9776;
@@ -23,10 +23,10 @@
         <a href="{% url 'dashboard' %}" class="brand">Eventify</a>
 
         <a
-          href="{% url 'browse_events' %}"
-          class="top-link {% if active_page == 'browse-events' %}active{% endif %}"
+          href="{% if current_profile.role == 'admin' %}{% url 'admin_events' %}{% else %}{% url 'browse_events' %}{% endif %}"
+          class="top-link {% if current_profile.role == 'admin' %}{% if active_page == 'dashboard' or active_page == 'admin-events' or active_page == 'admin-users' or active_page == 'admin-tickets' or active_page == 'admin-payments' or active_page == 'admin-support' %}active{% endif %}{% elif active_page == 'browse-events' %}active{% endif %}"
         >
-          <span>{{ ui_labels.browse_events }}</span>
+          <span>{% if current_profile.role == 'admin' %}Platform Admin{% else %}{{ ui_labels.browse_events }}{% endif %}</span>
           <img
             src="{% static 'img/search_data_10102577.png' %}"
             alt=""
@@ -38,9 +38,9 @@
 
         <div class="top-actions">
           <a
-            href="{% url 'browse_events' %}"
-            class="icon-button browse-mobile-link {% if active_page == 'browse-events' %}active{% endif %}"
-            aria-label="{{ ui_labels.browse_events_aria }}"
+            href="{% if current_profile.role == 'admin' %}{% url 'admin_events' %}{% else %}{% url 'browse_events' %}{% endif %}"
+            class="icon-button browse-mobile-link {% if current_profile.role == 'admin' %}{% if active_page == 'dashboard' or active_page == 'admin-events' or active_page == 'admin-users' or active_page == 'admin-tickets' or active_page == 'admin-payments' or active_page == 'admin-support' %}active{% endif %}{% elif active_page == 'browse-events' %}active{% endif %}"
+            aria-label="{% if current_profile.role == 'admin' %}Platform Admin{% else %}{{ ui_labels.browse_events_aria }}{% endif %}"
           >
             <img
               src="{% static 'img/search_data_10102577.png' %}"
@@ -128,8 +128,9 @@
           {% endfor %}
         </nav>
       </aside>
+      <button type="button" class="sidebar-backdrop" data-sidebar-backdrop hidden aria-label="Close menu"></button>
 
-      <main class="content">
+      <main class="content{% if current_profile.role == 'admin' %} admin-content{% endif %}">
         {% if messages %}
           {% for message in messages %}
             <div class="flash flash-{{ message.tags }}" data-auto-dismiss="true">{{ message }}</div>
