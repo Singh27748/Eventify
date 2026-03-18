@@ -21,7 +21,8 @@
     }
   </style>
   <section class="event-hero card">
-    <div class="event-banner" style="background-image: url('{{ event.image_source|default:'' }}')">
+
+    <div class="event-banner" data-bg="{{ event.image_source|default:'' }}">
       <span class="category-chip dark">{{ event.category }}</span>
       {% if event.is_private %}
         <span class="badge-private">🔒 Private</span>
@@ -96,6 +97,7 @@
         <div class="role-slot-box participant-slot-box">
           <div class="card-head">
             <h3>Participants</h3>
+            {% if event_participants %}
             <div class="action-row">
               <a href="{% url 'download_event_participants_excel' event.id %}?open=1" class="small-btn" target="_blank" rel="noopener">
                 Open File
@@ -104,6 +106,7 @@
                 Download Excel
               </a>
             </div>
+            {% endif %}
           </div>
           {% if event_participants %}
             <div class="table-wrap participants-panel-wrap">
@@ -142,7 +145,7 @@
                             title="Open ticket for {{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}"
                             aria-label="Open ticket for {{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}"
                           >
-                            {{ booking.user.first_name|default:booking.attendee_name|default:booking.user.username }}
+                            Open Ticket
                           </a>
                         {% else %}
                           -
@@ -171,7 +174,7 @@
           <article class="event-item">
             <h3>{{ item.title }}</h3>
             <p>{{ item.date|date_human }} | {{ item.location }}</p>
-            <a href="{% url 'event_detail' item.id %}" class="small-btn">View</a>
+            <a href="{% url 'event_detail' item.id %}" class="small-btn">View Event</a>
           </article>
         {% empty %}
           <p class="empty-text">No related events found.</p>
@@ -241,7 +244,7 @@
       {% if event_gallery_images %}
         <div class="past-album-grid">
           {% for image in event_gallery_images %}
-            <article class="past-album-item" style="height: 220px;">
+            <article class="past-album-item">
               <img src="{{ image.image_url }}" alt="{{ image.caption|default:event.title }}" loading="lazy" />
               <div class="past-album-overlay">
                 <p>{{ image.caption|default:'Event Gallery Image' }}</p>
@@ -260,4 +263,16 @@
       {% endif %}
     </div>
   </section>
+
+  <script>
+    (function(){
+      try {
+        document.querySelectorAll('.event-banner[data-bg]').forEach(function(el){
+          var url = el.getAttribute('data-bg') || '';
+          if(url) el.style.backgroundImage = 'url("' + url + '")';
+        });
+      } catch(e) { /* ignore */ }
+    })();
+  </script>
+
 {% endblock %}

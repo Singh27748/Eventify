@@ -32,8 +32,8 @@
           <h2>Login</h2>
           <form action="{% url 'login_submit' %}" method="post">
             {% csrf_token %}
-            <label>Login as</label>
-            <select name="role" required>
+            <label for="login-role">Login as</label>
+            <select id="login-role" name="role" required>
               <option value="user">User</option>
               <option value="organizer">Organizer</option>
               <option value="admin">Admin</option>
@@ -48,9 +48,9 @@
 
             <button type="submit" class="primary-btn">Login</button>
           </form>
-          <div class="inline-stack" style="margin-top: 12px;">
-            <a href="{% url 'social_login_google' %}" class="small-btn" style="width: 100%; text-align: center;">Continue with Google</a>
-            <a href="{% url 'social_login_github' %}" class="small-btn" style="width: 100%; text-align: center;">Continue with GitHub</a>
+          <div class="inline-stack oauth-buttons">
+            <a href="{% url 'social_login_google' %}" class="small-btn oauth-btn">Continue with Google</a>
+            <a href="{% url 'social_login_github' %}" class="small-btn oauth-btn">Continue with GitHub</a>
           </div>
           <a href="{% url 'forgot_password' %}" class="inline-link">Forgot password?</a>
         </section>
@@ -59,8 +59,8 @@
           <h2>Create Account</h2>
           <form action="{% url 'register_send_otp' %}" method="post">
             {% csrf_token %}
-            <label>Register as</label>
-            <select name="role" required>
+            <label for="register-role">Register as</label>
+            <select id="register-role" name="role" required>
               <option value="user">User</option>
               <option value="organizer">Organizer</option>
             </select>
@@ -83,11 +83,6 @@
         </section>
       </div>
 
-      <div class="auth-demo">
-        <p><strong>Demo User:</strong> john@example.com / password123</p>
-        <p><strong>Demo Organizer:</strong> organizer@example.com / organizer123</p>
-        <p><strong>Demo Admin:</strong> admin@example.com / admin123</p>
-      </div>
-    </div>
+          </div>
   </div>
 {% endblock %}
