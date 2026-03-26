@@ -1,0 +1,99 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Ticket Rechecking | Eventify{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <h1>Ticket Rechecking</h1>
+    <p>Verify ticket authenticity using Ticket ID or QR code text.</p>
+  </section>
+
+  <section class="dashboard-panel dashboard-scanner-panel">
+    <div class="dashboard-panel-head">
+      <div>
+        <span class="dashboard-panel-kicker">Verification</span>
+        <h2>Ticket Rechecking</h2>
+      </div>
+      <p class="dashboard-panel-note">
+        Verify a ticket without marking attendance. Paste Ticket ID or QR code text.
+      </p>
+    </div>
+    <form action="{% url 'ticket_recheck' %}" method="get" class="ticket-scan-manual">
+      <input
+        type="text"
+        name="ticket"
+        value="{{ ticket_value }}"
+        placeholder="Enter Ticket ID or QR code link"
+        autocomplete="off"
+        required
+      />
+      <button type="submit" class="small-btn">Recheck</button>
+    </form>
+
+    {% if ticket_value and not result %}
+      <div class="flash flash-error" style="margin-top: 12px;">Ticket is invalid or not found.</div>
+    {% endif %}
+  </section>
+
+  {% if result %}
+    <section class="card">
+      <div class="card-head">
+        <h2>Recheck Result</h2>
+        <span
+          class="badge {% if status_tone == 'success' %}badge-green{% elif status_tone == 'warning' %}badge-orange{% else %}badge-red{% endif %}"
+        >
+          {{ status_label }}
+        </span>
+      </div>
+      <div class="table-wrap ticket-scan-table-wrap">
+        <table class="ticket-scan-table">
+          <tbody>
+            <tr>
+              <th>Ticket ID</th>
+              <td>{{ result.ticket_id }}</td>
+            </tr>
+            <tr>
+              <th>User</th>
+              <td>{{ result.user.get_full_name|default:result.user.username }}</td>
+            </tr>
+            <tr>
+              <th>Event</th>
+              <td>{{ result.event.title }}</td>
+            </tr>
+            <tr>
+              <th>Date & Time</th>
+              <td>{{ result.event.date|date_human }} | {{ result.event.time }}</td>
+            </tr>
+            <tr>
+              <th>Location</th>
+              <td>{{ result.event.location }}</td>
+            </tr>
+            <tr>
+              <th>Category</th>
+              <td>{{ result.event.category }}</td>
+            </tr>
+            <tr>
+              <th>Ticket Type</th>
+              <td>{{ result.booking.ticket_type.name|default:"Standard" }}</td>
+            </tr>
+            <tr>
+              <th>Applied Role</th>
+              <td>{{ result.booking.applied_role_label }}</td>
+            </tr>
+            <tr>
+              <th>Tickets</th>
+              <td>{{ result.booking.tickets }}</td>
+            </tr>
+            <tr>
+              <th>Booking Status</th>
+              <td>{{ result.booking.status|title }}</td>
+            </tr>
+            <tr>
+              <th>Booking Date</th>
+              <td>{{ result.booking.booking_date|date_human }} | {{ result.booking.booking_date|date:"h:i A" }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endif %}
+{% endblock %}

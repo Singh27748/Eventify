@@ -1,0 +1,43 @@
+{% extends "core/base_auth.html" %}
+{% block title %}Choose Role | Eventify{% endblock %}
+{% block content %}
+  <div class="auth-page">
+    <div class="auth-overlay"></div>
+    <div class="auth-card auth-role-page-card">
+      <div class="auth-brand">
+        <h1>{% if active_tab == "login" %}Welcome!{% else %}Create your account{% endif %}</h1>
+        <p>{{ role_prompt }}</p>
+      </div>
+
+      {% if is_logged_in %}
+        <div class="flash flash-info">
+          You are already logged in.
+          <a href="{% url 'dashboard' %}" class="inline-link">Go to Dashboard</a>
+        </div>
+      {% endif %}
+
+      {% if messages %}
+        {% for message in messages %}
+          <div class="flash flash-{{ message.tags }}" data-auto-dismiss="true">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+
+      <div class="auth-tabs">
+        <a href="{{ login_tab_url }}" class="{% if active_tab == 'login' %}active{% endif %}">Login</a>
+        <a href="{{ register_tab_url }}" class="{% if active_tab == 'register' %}active{% endif %}">Register</a>
+      </div>
+
+      <div class="auth-role-grid {% if active_tab == 'login' %}auth-role-grid-login{% else %}auth-role-grid-register{% endif %}">
+        {% for role_card in role_cards %}
+          <a href="{{ role_card.href }}" class="auth-role-link-card tone-{{ role_card.tone }}">
+            <span class="auth-role-card-shell">
+              <span class="auth-role-icon">{{ role_card.icon }}</span>
+              <strong>{{ role_card.label }}</strong>
+              <small>{{ role_card.description }}</small>
+            </span>
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+{% endblock %}

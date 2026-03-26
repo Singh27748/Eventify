@@ -5,40 +5,9 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css" />
 {% endblock %}
 {% block content %}
+  {% url 'public_events' as public_events_url %}
   <div class="landing-page">
-    <header class="landing-header" id="home">
-      <div class="landing-header-inner">
-        <div class="landing-logo">Eventify</div>
-        <form class="landing-nav-search" action="{% url 'home' %}" method="get">
-          <input
-            type="text"
-            name="q"
-            value="{{ query }}"
-            placeholder="Search by name / location / Category"
-          />
-          {% if selected_category %}
-            <input type="hidden" name="category" value="{{ selected_category }}" />
-          {% endif %}
-          <button type="submit" class="primary-btn" aria-label="Search">
-            <img src="{% static 'img/search_data_10102577.png' %}" alt="" class="search-btn-icon" />
-          </button>
-        </form>
-        <nav class="landing-nav">
-          <a href="#home">Home</a>
-          <a href="{% url 'public_events' %}">Events</a>
-          <a href="#about">About</a>
-          <a href="#contact">Contact</a>
-        </nav>
-        <div class="landing-auth">
-          {% if is_logged_in %}
-            <a href="{% url 'dashboard' %}" class="primary-btn">Dashboard</a>
-          {% else %}
-            <a href="{% url 'auth_page' %}?tab=register" class="primary-btn">Register</a>
-            <a href="{% url 'auth_page' %}?tab=login" class="primary-btn">Login</a>
-          {% endif %}
-        </div>
-      </div>
-    </header>
+    {% include "core/includes/landing_header.html" with header_id="home" search_action=request.path query=query selected_category=selected_category home_href="#home" events_href=public_events_url about_href="#about" contact_href="#contact" home_active=True events_active=False search_placeholder="Search by name / location / Category" %}
 
     <main class="landing-main">
       {% if messages %}
@@ -46,6 +15,82 @@
           <div class="flash flash-{{ message.tags }}" data-auto-dismiss="true">{{ message }}</div>
         {% endfor %}
       {% endif %}
+
+      {% with hero_featured=hero_grid_events.0 %}
+        <section class="landing-showcase">
+          <a
+            href="{% if is_logged_in and hero_featured %}{% url 'event_detail' hero_featured.id %}{% else %}{% url 'public_events' %}{% endif %}"
+            class="showcase-billboard"
+            aria-label="{% if is_logged_in and hero_featured %}Open {{ hero_featured.title }}{% else %}Browse events{% endif %}"
+            data-slot-index="0"
+            data-slot-design="{{ hero_slot_design }}"
+          >
+            <div class="showcase-billboard-media">
+              {% if hero_promo.image_source %}
+                <img src="{{ hero_promo.image_source }}" alt="{{ hero_promo.headline }}" loading="lazy" />
+              {% elif hero_featured and hero_featured.image_source %}
+                <img src="{{ hero_featured.image_source }}" alt="{{ hero_featured.title }}" loading="lazy" />
+              {% else %}
+                <span class="showcase-billboard-fallback"></span>
+              {% endif %}
+            </div>
+            <div class="showcase-billboard-scrim"></div>
+            <div class="showcase-billboard-content showcase-billboard-content--pro">
+              {% if hero_featured %}
+                <span class="showcase-billboard-kicker">Featured Event</span>
+                <h1 class="showcase-billboard-title">{{ hero_featured.title }}</h1>
+                <div class="showcase-billboard-meta">
+                  <span>{{ hero_featured.category }}</span>
+                  <span>{{ hero_featured.location }}</span>
+                </div>
+              {% else %}
+                <h1 class="showcase-billboard-title">{{ hero_promo.headline }}</h1>
+                <p class="showcase-billboard-sub">{{ hero_promo.description }}</p>
+              {% endif %}
+            </div>
+          </a>
+
+          <div class="showcase-promo-grid">
+            <div class="showcase-event-secondary-list">
+              {% for slot in promo_slots %}
+                {% if slot.event %}
+                  <article
+                    class="showcase-event-card showcase-event-card-secondary"
+                    data-slot-index="{{ slot.slot_index }}"
+                    data-slot-size="{{ slot.slot_size }}"
+                    data-slot-design="{{ slot.slot_design }}"
+                  >
+                    <a href="{% url 'event_detail' slot.event.id %}" class="showcase-event-card-link">
+                      <span class="showcase-event-media">
+                        {% if slot.event.image_source %}
+                          <img src="{{ slot.event.image_source }}" alt="{{ slot.event.title }}" loading="lazy" />
+                        {% else %}
+                          <span class="showcase-event-fallback"></span>
+                        {% endif %}
+                      </span>
+                      <span class="showcase-event-content">
+                        <small class="showcase-event-eyebrow">{{ slot.event.category }}</small>
+                        <strong>{{ slot.event.title }}</strong>
+                        <span class="showcase-event-meta">
+                          {{ slot.event.date|date_human }} | {{ slot.event.location }}
+                        </span>
+                        <span class="showcase-event-price-row">
+                          <em>{{ slot.event.price|money }}</em>
+                          <span>Open</span>
+                        </span>
+                      </span>
+                    </a>
+                  </article>
+                {% else %}
+                  <div class="showcase-empty-card">More promoted events will appear here soon.</div>
+                {% endif %}
+              {% empty %}
+                <div class="showcase-empty-card">More promoted events will appear here soon.</div>
+              {% endfor %}
+            </div>
+          </div>
+        </section>
+      {% endwith %}
 
       <section class="landing-events" id="events">
         <div class="section-head">
@@ -252,26 +297,31 @@
       </section>
 
       <section class="landing-connect-section" aria-labelledby="newUserConnectTitle">
-        <div class="section-head">
-          <h2 id="newUserConnectTitle">Connect with Eventify</h2>
-        </div>
-        <div class="landing-connect-card">
-          <div class="landing-connect-panel">
+        <div class="landing-connect-shell">
+          <div class="landing-connect-card">
+            <span class="landing-connect-kicker">Reach out anytime</span>
+            <h2 id="newUserConnectTitle">Connect with <span>Eventify</span></h2>
             <form action="{% url 'newsletter_subscribe' %}" method="post" class="landing-connect-form">
               {% csrf_token %}
-              <input
-                type="email"
-                name="email"
-                placeholder="Enter your email"
-                value="{{ home_contact_email }}"
-                required
-              />
-              <textarea
-                name="question"
-                rows="3"
-                placeholder="Write your question here"
-                required
-              ></textarea>
+              <label class="landing-connect-field">
+                <span>Email</span>
+                <input
+                  type="email"
+                  name="email"
+                  placeholder="you@example.com"
+                  value="{{ home_contact_email }}"
+                  required
+                />
+              </label>
+              <label class="landing-connect-field landing-connect-field-message">
+                <span>Question</span>
+                <textarea
+                  name="question"
+                  rows="4"
+                  placeholder="Write here..."
+                  required
+                ></textarea>
+              </label>
               <button type="submit" class="primary-btn">Send</button>
             </form>
           </div>
@@ -327,4 +377,194 @@
 {% endblock %}
 {% block extra_scripts %}
   <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
+  {{ ad_rotation_payload|json_script:"ad-rotation-data" }}
+  <script>
+    (function () {
+      const dataEl = document.getElementById("ad-rotation-data");
+      if (!dataEl) return;
+      let payload = null;
+      try {
+        payload = JSON.parse(dataEl.textContent || "{}");
+      } catch (error) {
+        return;
+      }
+
+      const slots = Array.isArray(payload.slots) ? payload.slots : [];
+      const fallbackItems = Array.isArray(payload.fallback_items)
+        ? payload.fallback_items
+        : [];
+      const cards = Array.from(
+        document.querySelectorAll(".showcase-event-card-secondary")
+      );
+      const hero = document.querySelector(".showcase-billboard");
+      if (!cards.length && !hero) return;
+
+      const maxSlots = Number(payload.slot_count || 0);
+      if (maxSlots > 0) {
+        cards.forEach((card) => {
+          const slotIndex = Number(card.dataset.slotIndex || 0);
+          if (slotIndex >= maxSlots) {
+            card.style.display = "none";
+          }
+        });
+      }
+
+      const updateMedia = (media, item) => {
+        if (!media) return;
+        const existingImg = media.querySelector("img");
+        const existingFallback = media.querySelector(".showcase-event-fallback");
+
+        if (item.image) {
+          let img = existingImg;
+          if (!img) {
+            img = document.createElement("img");
+            img.loading = "lazy";
+            media.prepend(img);
+          }
+          img.src = item.image;
+          img.alt = item.title || "Event";
+          if (existingFallback) {
+            existingFallback.remove();
+          }
+          return;
+        }
+
+        if (existingImg) {
+          existingImg.remove();
+        }
+        if (!existingFallback) {
+          const fallback = document.createElement("span");
+          fallback.className = "showcase-event-fallback";
+          media.prepend(fallback);
+        }
+      };
+
+      const updateCard = (card, item) => {
+        const link = card.querySelector("a");
+        if (link) {
+          link.href = item.url || "#";
+          link.setAttribute("aria-label", item.title || "Event");
+        }
+        const eyebrow = card.querySelector(".showcase-event-eyebrow");
+        if (eyebrow) {
+          eyebrow.textContent = item.category || "Event";
+        }
+        const title = card.querySelector("strong");
+        if (title) {
+          title.textContent = item.title || "Event";
+        }
+        const meta = card.querySelector(".showcase-event-meta");
+        if (meta) {
+          const metaParts = [item.date, item.location].filter(Boolean);
+          meta.textContent = metaParts.join(" | ");
+        }
+        const price = card.querySelector(".showcase-event-price-row em");
+        if (price) {
+          price.textContent = item.price || "";
+        }
+        updateMedia(card.querySelector(".showcase-event-media"), item);
+      };
+
+      const updateHeroMedia = (media, item) => {
+        if (!media) return;
+        const existingImg = media.querySelector("img");
+        const existingFallback = media.querySelector(".showcase-billboard-fallback");
+
+        if (item.image) {
+          let img = existingImg;
+          if (!img) {
+            img = document.createElement("img");
+            img.loading = "lazy";
+            media.prepend(img);
+          }
+          img.src = item.image;
+          img.alt = item.title || "Event";
+          if (existingFallback) {
+            existingFallback.remove();
+          }
+          return;
+        }
+
+        if (existingImg) {
+          existingImg.remove();
+        }
+        if (!existingFallback) {
+          const fallback = document.createElement("span");
+          fallback.className = "showcase-billboard-fallback";
+          media.prepend(fallback);
+        }
+      };
+
+      const updateHero = (item) => {
+        if (!hero || !item) return;
+        hero.href = item.url || "#";
+        hero.setAttribute("aria-label", item.title || "Event");
+        const title = hero.querySelector(".showcase-billboard-title");
+        if (title) {
+          title.textContent = item.title || "Event";
+        }
+        const meta = hero.querySelector(".showcase-billboard-meta");
+        if (meta) {
+          meta.innerHTML = "";
+          const parts = [item.category, item.location].filter(Boolean);
+          parts.forEach((text) => {
+            const span = document.createElement("span");
+            span.textContent = text;
+            meta.appendChild(span);
+          });
+        }
+        updateHeroMedia(hero.querySelector(".showcase-billboard-media"), item);
+      };
+
+      const heroSlot = slots.find(
+        (slot) => Number(slot.slot_index || 0) === 0
+      );
+      if (hero && heroSlot) {
+        const heroItems =
+          Array.isArray(heroSlot.items) && heroSlot.items.length
+            ? heroSlot.items
+            : fallbackItems;
+        if (heroItems.length) {
+          let heroCursor = 0;
+          const heroRotation = Number(
+            heroSlot.rotation_seconds || payload.rotation_seconds || 0
+          );
+          const renderHero = () => {
+            updateHero(heroItems[heroCursor]);
+            heroCursor = (heroCursor + 1) % heroItems.length;
+          };
+          renderHero();
+          if (heroItems.length > 1 && heroRotation > 0) {
+            window.setInterval(renderHero, Math.max(3, heroRotation) * 1000);
+          }
+        }
+      }
+
+      cards.forEach((card) => {
+        const slotIndex = Number(card.dataset.slotIndex || 0);
+        const slotPayload = slots.find(
+          (slot) => Number(slot.slot_index || 0) === slotIndex
+        );
+        const slotItems =
+          slotPayload && Array.isArray(slotPayload.items) && slotPayload.items.length
+            ? slotPayload.items
+            : fallbackItems;
+        if (!slotItems.length) return;
+
+        let cursor = 0;
+        const rotationSeconds = Number(
+          (slotPayload && slotPayload.rotation_seconds) || payload.rotation_seconds || 0
+        );
+        const render = () => {
+          updateCard(card, slotItems[cursor]);
+          cursor = (cursor + 1) % slotItems.length;
+        };
+
+        render();
+        if (slotItems.length > 1 && rotationSeconds > 0) {
+          window.setInterval(render, Math.max(3, rotationSeconds) * 1000);
+        }
+      });
+    })();
+  </script>
 {% endblock %}

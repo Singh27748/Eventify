@@ -1,8 +1,7 @@
-{% load static %}
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8">
+<head>
+    <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{% block title %}Eventify{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -13,10 +12,10 @@
     />
     <link rel="stylesheet" href="{% static 'css/style.css' %}" />
     {% block extra_head %}{% endblock %}
-  </head>
-  <body>
+</head>
+<body>
     {% block content %}{% endblock %}
     {% block extra_scripts %}{% endblock %}
     <script src="{% static 'js/app.js' %}"></script>
-  </body>
+</body>
 </html>

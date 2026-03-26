@@ -5,37 +5,10 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css" />
 {% endblock %}
 {% block content %}
+  {% url 'home' as home_url %}
+  {% url 'public_events' as public_events_url %}
   <div class="landing-page">
-    <header class="landing-header" id="events">
-      <div class="landing-header-inner">
-        <div class="landing-logo">Eventify</div>
-        <form class="landing-nav-search" action="{% url 'public_events' %}" method="get">
-          <input
-            type="text"
-            name="q"
-            value="{{ query }}"
-            placeholder="Search by name / location / category"
-          />
-          <button type="submit" class="primary-btn" aria-label="Search">
-            <img src="{% static 'img/search_data_10102577.png' %}" alt="" class="search-btn-icon" />
-          </button>
-        </form>
-        <nav class="landing-nav">
-          <a href="{% url 'home' %}">Home</a>
-          <a href="{% url 'public_events' %}" class="active">Events</a>
-          <a href="#about">About</a>
-          <a href="#contact">Contact</a>
-        </nav>
-        <div class="landing-auth">
-          {% if is_logged_in %}
-            <a href="{% url 'dashboard' %}" class="primary-btn">Dashboard</a>
-          {% else %}
-            <a href="{% url 'auth_page' %}?tab=register" class="primary-btn">Register</a>
-            <a href="{% url 'auth_page' %}?tab=login" class="primary-btn">Login</a>
-          {% endif %}
-        </div>
-      </div>
-    </header>
+    {% include "core/includes/landing_header.html" with header_id="events" search_action=request.path query=query home_href=home_url events_href=public_events_url about_href=home_url|add:"#about" contact_href="#contact" home_active=False events_active=True search_placeholder="Search by name / location / category" %}
     <main class="landing-main">
       {% if messages %}
         {% for message in messages %}
@@ -69,7 +42,7 @@
                     {% if is_logged_in %}
                       <a href="{% url 'book_event' event.id %}" class="primary-btn small-btn">View Details</a>
                     {% else %}
-                      <a href="{% url 'auth_page' %}?tab=login&next={% url 'book_event' event.id %}" class="primary-btn small-btn">Log-in to View Details</a>
+                      <a href="{% url 'auth_role_page' %}?tab=login&next={% url 'book_event' event.id %}" class="primary-btn small-btn">Log-in to View Details</a>
                     {% endif %}
                   </div>
                 </div>

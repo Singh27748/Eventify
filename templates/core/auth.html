@@ -23,8 +23,8 @@
       {% endif %}
 
       <div class="auth-tabs">
-        <a href="{% url 'auth_page' %}?tab=login" class="{% if active_tab == 'login' %}active{% endif %}">Login</a>
-        <a href="{% url 'auth_page' %}?tab=register" class="{% if active_tab == 'register' %}active{% endif %}">Register</a>
+        <a href="{{ login_tab_url }}" class="{% if active_tab == 'login' %}active{% endif %}">Login</a>
+        <a href="{{ register_tab_url }}" class="{% if active_tab == 'register' %}active{% endif %}">Register</a>
       </div>
 
       <div class="auth-panels">
@@ -32,14 +32,20 @@
           <h2>Login</h2>
           <form action="{% url 'login_submit' %}" method="post">
             {% csrf_token %}
-            <label for="login-role">Login as</label>
-            <select id="login-role" name="role" required>
-              <option value="user">User</option>
-              <option value="organizer">Organizer</option>
-              <option value="admin">Admin</option>
-            </select>
+            <div class="auth-selected-role">
+              <div class="auth-selected-role-copy">
+                <span class="auth-selected-role-kicker">Login as</span>
+                <strong>{{ selected_role_label }}</strong>
+                <small>{{ selected_role_description }}</small>
+              </div>
+              <a href="{{ change_role_url }}" class="inline-link">Change role</a>
+            </div>
+            <input type="hidden" name="role" value="{{ selected_role }}" />
+            {% if next_url %}
+              <input type="hidden" name="next" value="{{ next_url }}" />
+            {% endif %}
 
-            <label>Email or Phone</label>
+            <label>Email</label>
             <input name="contact" type="text" placeholder="john@example.com" required />
 
             <label>Password</label>
@@ -59,16 +65,20 @@
           <h2>Create Account</h2>
           <form action="{% url 'register_send_otp' %}" method="post">
             {% csrf_token %}
-            <label for="register-role">Register as</label>
-            <select id="register-role" name="role" required>
-              <option value="user">User</option>
-              <option value="organizer">Organizer</option>
-            </select>
+            <div class="auth-selected-role">
+              <div class="auth-selected-role-copy">
+                <span class="auth-selected-role-kicker">Register as</span>
+                <strong>{{ selected_role_label }}</strong>
+                <small>{{ selected_role_description }}</small>
+              </div>
+              <a href="{{ change_role_url }}" class="inline-link">Change role</a>
+            </div>
+            <input type="hidden" name="role" value="{{ selected_role }}" />
 
             <label>Full Name</label>
             <input name="name" type="text" placeholder="John Doe" required />
 
-            <label>Email or Phone</label>
+            <label>Email</label>
             <input name="contact" type="text" placeholder="john@example.com" required />
 
             <label>Password</label>

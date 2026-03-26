@@ -48,6 +48,9 @@ class Profile(models.Model):
     two_factor_enabled = models.BooleanField(default=False)
     two_factor_secret = models.CharField(max_length=255, blank=True)
     two_factor_backup_codes = models.JSONField(default=list, blank=True)
+
+    # Profile completion tracking
+    profile_completed = models.BooleanField(default=False)
     
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -68,10 +71,14 @@ class OTPRequest(models.Model):
     PURPOSE_REGISTER = "register"
     PURPOSE_RESET = "reset"
     PURPOSE_DELETE_ACCOUNT = "delete_account"
+    PURPOSE_SECURITY_EMAIL = "security_email"
+    PURPOSE_PASSWORD_EMAIL = "password_email"
     PURPOSE_CHOICES = (
         (PURPOSE_REGISTER, "Register"),
         (PURPOSE_RESET, "Reset"),
         (PURPOSE_DELETE_ACCOUNT, "Delete Account"),
+        (PURPOSE_SECURITY_EMAIL, "Security Question Email"),
+        (PURPOSE_PASSWORD_EMAIL, "Password Change Email"),
     )
 
     purpose = models.CharField(max_length=20, choices=PURPOSE_CHOICES)
@@ -391,6 +398,21 @@ class Payment(models.Model):
     @property
     def method_detail_summary(self):
         meta = self.payment_meta or {}
+        if self.status == self.STATUS_REFUNDED:
+            refund_destination = (meta.get("refund_destination_summary") or "").strip()
+            original_transaction_ref = (meta.get("original_transaction_ref") or "").strip()
+            refund_mode = (meta.get("refund_mode") or "").strip()
+            parts = []
+            if refund_destination:
+                parts.append(f"Refunded to {refund_destination}")
+            elif self.method:
+                parts.append(f"Refunded to {self.method}")
+            if original_transaction_ref:
+                parts.append(f"Original Txn {original_transaction_ref}")
+            if refund_mode:
+                parts.append(f"{refund_mode.title()} refund")
+            if parts:
+                return " | ".join(parts)
         if self.method == "UPI":
             return meta.get("upi_id") or self.upi_id or "-"
         if self.method == "Card":
@@ -461,6 +483,177 @@ class PromoCode(models.Model):
         return min(amount_value, percentage_discount)
 
 
+class HomepageHeroPromo(models.Model):
+    eyebrow = models.CharField(max_length=80)
+    headline = models.CharField(max_length=180)
+    description = models.TextField()
+    chip_one = models.CharField(max_length=40, blank=True)
+    chip_two = models.CharField(max_length=40, blank=True)
+    chip_three = models.CharField(max_length=40, blank=True)
+    image_url = models.URLField(blank=True, null=True)
+    image_file = models.ImageField(upload_to="homepage_hero/", blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self):
+        return self.headline
+
+    @property
+    def image_source(self):
+        if self.image_file:
+            try:
+                return self.image_file.url
+            except ValueError:
+                pass
+        return (self.image_url or "").strip()
+
+
+class EventAdvertisement(models.Model):
+    """
+    EventAdvertisement model - Public event advertisement approval workflow.
+    Organizers can request advertisement; admins approve/reject.
+    """
+
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = (
+        (STATUS_PENDING, "Pending"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    )
+
+    event = models.OneToOneField(
+        Event,
+        on_delete=models.CASCADE,
+        related_name="advertisement",
+    )
+    requested_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="event_ad_requests",
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="event_ad_reviews",
+    )
+    reviewed_at = models.DateTimeField(blank=True, null=True)
+    admin_note = models.CharField(max_length=255, blank=True)
+    notified_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ["-requested_at", "-id"]
+
+    def __str__(self):
+        return f"Ad Request: {self.event.title} ({self.status})"
+
+
+class AdvertisementSettings(models.Model):
+    """
+    Global advertisement rotation settings for homepage slots.
+    """
+
+    rotation_seconds = models.PositiveSmallIntegerField(default=8)
+    slot_count = models.PositiveSmallIntegerField(default=2)
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="advertisement_settings_updates",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at", "-id"]
+
+    def __str__(self):
+        return f"Advertisement Settings ({self.rotation_seconds}s)"
+
+
+class AdvertisementSlot(models.Model):
+    """
+    Slot configuration for homepage advertisement cards.
+    """
+
+    SIZE_COMPACT = "compact"
+    SIZE_STANDARD = "standard"
+    SIZE_LARGE = "large"
+    SIZE_WIDE = "wide"
+    SIZE_CHOICES = (
+        (SIZE_COMPACT, "Compact"),
+        (SIZE_STANDARD, "Standard"),
+        (SIZE_LARGE, "Large"),
+        (SIZE_WIDE, "Wide"),
+    )
+
+    DESIGN_CLASSIC = "classic"
+    DESIGN_GLASS = "glass"
+    DESIGN_BOLD = "bold"
+    DESIGN_SOFT = "soft"
+    DESIGN_CHOICES = (
+        (DESIGN_CLASSIC, "Classic"),
+        (DESIGN_GLASS, "Glass"),
+        (DESIGN_BOLD, "Bold"),
+        (DESIGN_SOFT, "Soft"),
+    )
+
+    slot_index = models.PositiveSmallIntegerField(default=0, unique=True)
+    rotation_seconds = models.PositiveSmallIntegerField(default=8)
+    size = models.CharField(max_length=12, choices=SIZE_CHOICES, default=SIZE_STANDARD)
+    design = models.CharField(max_length=12, choices=DESIGN_CHOICES, default=DESIGN_CLASSIC)
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="advertisement_slot_updates",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["slot_index"]
+
+    def __str__(self):
+        return f"Advertisement Slot {self.slot_index}"
+
+
+class AdvertisementSlotItem(models.Model):
+    """
+    Assign approved advertisements to slots with ordering.
+    """
+
+    slot = models.ForeignKey(
+        AdvertisementSlot,
+        on_delete=models.CASCADE,
+        related_name="items",
+    )
+    advertisement = models.ForeignKey(
+        EventAdvertisement,
+        on_delete=models.CASCADE,
+        related_name="slot_items",
+    )
+    position = models.PositiveSmallIntegerField(default=1)
+
+    class Meta:
+        ordering = ["slot", "position", "id"]
+        unique_together = (("slot", "advertisement"),)
+
+    def __str__(self):
+        return f"Slot {self.slot.slot_index} -> {self.advertisement.event.title}"
+
+
 class PrivateEventPayment(models.Model):
     """
     PrivateEventPayment model - Private events ke liye payment track karta hai.
@@ -521,6 +714,65 @@ class Notification(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 
+class SupportConversation(models.Model):
+    """Persistent AI support conversation for a logged-in user."""
+
+    STATUS_ACTIVE = "active"
+    STATUS_HANDED_OFF = "handed_off"
+    STATUS_CLOSED = "closed"
+    STATUS_CHOICES = (
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_HANDED_OFF, "Handed Off"),
+        (STATUS_CLOSED, "Closed"),
+    )
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="support_conversations")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
+    title = models.CharField(max_length=180, blank=True, default="")
+    model_provider = models.CharField(max_length=40, blank=True, default="")
+    model_name = models.CharField(max_length=120, blank=True, default="")
+    last_summary = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at", "-id"]
+
+    def __str__(self):
+        return f"Support conversation #{self.pk} for {self.user.username}"
+
+
+class SupportMessage(models.Model):
+    """Individual support chat messages exchanged with AI or admins."""
+
+    SENDER_USER = "user"
+    SENDER_ASSISTANT = "assistant"
+    SENDER_ADMIN = "admin"
+    SENDER_SYSTEM = "system"
+    SENDER_CHOICES = (
+        (SENDER_USER, "User"),
+        (SENDER_ASSISTANT, "Assistant"),
+        (SENDER_ADMIN, "Admin"),
+        (SENDER_SYSTEM, "System"),
+    )
+
+    conversation = models.ForeignKey(
+        SupportConversation,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+    sender_type = models.CharField(max_length=20, choices=SENDER_CHOICES)
+    content = models.TextField()
+    meta = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return f"{self.sender_type} message #{self.pk} for conversation #{self.conversation_id}"
+
+
 class SupportTicket(models.Model):
     """
     SupportTicket model - Users ki support tickets ke liye use hota hai.
@@ -535,12 +787,64 @@ class SupportTicket(models.Model):
         (STATUS_IN_PROGRESS, "In Progress"),
         (STATUS_RESOLVED, "Resolved"),
     )
+    SOURCE_MANUAL = "manual"
+    SOURCE_AI_HANDOFF = "ai_handoff"
+    SOURCE_CHOICES = (
+        (SOURCE_MANUAL, "Manual"),
+        (SOURCE_AI_HANDOFF, "AI Handoff"),
+    )
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="support_tickets")
+    conversation = models.ForeignKey(
+        SupportConversation,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tickets",
+    )
     subject = models.CharField(max_length=180)
     message = models.TextField()
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_MANUAL)
+    ai_summary = models.TextField(blank=True, default="")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_OPEN)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self):
+        return f"Support ticket #{self.pk} - {self.subject}"
+
+
+class SupportReply(models.Model):
+    """Admin-authored or AI-drafted replies for support tickets."""
+
+    STATUS_DRAFT = "draft"
+    STATUS_SENT = "sent"
+    STATUS_CHOICES = (
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_SENT, "Sent"),
+    )
+
+    ticket = models.ForeignKey(SupportTicket, on_delete=models.CASCADE, related_name="replies")
+    admin = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="support_replies_sent",
+    )
+    subject = models.CharField(max_length=180)
+    body = models.TextField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    ai_generated = models.BooleanField(default=True)
+    sent_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at", "-id"]
+
+    def __str__(self):
+        return f"Support reply #{self.pk} for ticket #{self.ticket_id}"
 
 
 class EventReview(models.Model):

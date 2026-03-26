@@ -14,6 +14,7 @@ from django.contrib.auth import authenticate, login
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.db.models import Q
 from django.http import JsonResponse
 from django.utils import timezone
@@ -259,6 +260,11 @@ def api_register_send_otp(request):
     if not all([role, name, contact, password, confirm_password]):
         return _json_error("Please fill all registration fields.", status=400)
 
+    try:
+        validate_email(contact)
+    except ValidationError:
+        return _json_error("Please provide a valid email address.", status=400)
+
     if password != confirm_password:
         return _json_error("Password and confirm password do not match.", status=400)
 
@@ -269,7 +275,7 @@ def api_register_send_otp(request):
 
     if Profile.objects.filter(contact=contact, role=role).exists():
         return _json_error(
-            "This email/phone is already registered for selected role.",
+            "This email is already registered for selected role.",
             status=409,
         )
 
@@ -337,7 +343,7 @@ def api_register_verify_otp(request):
         otp_request.is_used = True
         otp_request.save(update_fields=["is_used"])
         return _json_error(
-            "This email/phone is already registered for selected role.",
+            "This email is already registered for selected role.",
             status=409,
         )
 
@@ -346,7 +352,7 @@ def api_register_verify_otp(request):
         username=username,
         first_name=username,
         last_name="",
-        email=otp_request.contact if "@" in otp_request.contact else "",
+        email=otp_request.contact,
         password=otp_request.password_hash,
     )
     profile, _ = Profile.objects.update_or_create(
@@ -354,7 +360,7 @@ def api_register_verify_otp(request):
         defaults={
             "role": otp_request.role,
             "contact": otp_request.contact,
-            "phone": "" if "@" in otp_request.contact else otp_request.contact,
+            "phone": "",
         },
     )
     create_notification(

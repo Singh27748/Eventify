@@ -11,6 +11,16 @@
     <div class="card">
       <h2>Security</h2>
       <p class="muted">Passwords now require uppercase, lowercase, number, and special characters. Inactive sessions expire automatically.</p>
+
+      <div class="inline-stack">
+        <form action="{% url 'settings_password_send_otp' %}" method="post">
+          {% csrf_token %}
+          <input type="hidden" name="channel" value="email" />
+          <button type="submit" class="small-btn">Send Email OTP</button>
+        </form>
+      </div>
+      <p class="muted">Verify with Email OTP before changing password.</p>
+
       <form action="{% url 'settings_password' %}" method="post">
         {% csrf_token %}
         <label for="oldPassword">Old Password</label>
@@ -21,6 +31,18 @@
 
         <label for="confirmPassword">Confirm Password</label>
         <input id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" required />
+
+        <label for="passwordEmailOtp">Email OTP</label>
+        <input
+          id="passwordEmailOtp"
+          name="emailOtp"
+          type="text"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          maxlength="6"
+          placeholder="Enter email OTP"
+          required
+        />
 
         <button type="submit" class="primary-btn">Change Password</button>
       </form>
@@ -79,6 +101,14 @@
   <section class="card">
     <h2>Security Question</h2>
     <p>Set a personal question. You will need this answer before deleting account.</p>
+    <div class="inline-stack">
+      <form action="{% url 'settings_security_send_otp' %}" method="post">
+        {% csrf_token %}
+        <input type="hidden" name="channel" value="email" />
+        <button type="submit" class="small-btn">Send Email OTP</button>
+      </form>
+    </div>
+    <p class="muted">Email OTP is required to save the security question.</p>
     {% url 'settings' as settings_url %}
     {% url 'settings_security_question' as settings_security_question_url %}
     <form action="{{ settings_security_question_url|default:settings_url }}" method="post">
@@ -101,6 +131,18 @@
         type="password"
         autocomplete="off"
         placeholder="Enter your answer"
+        required
+      />
+
+      <label for="securityEmailOtp">Email OTP</label>
+      <input
+        id="securityEmailOtp"
+        name="emailOtp"
+        type="text"
+        inputmode="numeric"
+        autocomplete="one-time-code"
+        maxlength="6"
+        placeholder="Enter email OTP"
         required
       />
 
@@ -132,7 +174,7 @@
           <ol>
             <li>Going to the login page</li>
             <li>Clicking "Forgot Password"</li>
-            <li>Entering your email/phone and role</li>
+            <li>Entering your email and role</li>
             <li>Verifying with OTP sent to your contact</li>
             <li>Setting a new password</li>
           </ol>
@@ -140,9 +182,9 @@
       </details>
       
       <details class="faq-item">
-        <summary>Can I change my email or phone number?</summary>
+        <summary>Can I change my email address?</summary>
         <div class="faq-answer">
-          <p>Currently, your contact email/phone is linked to your account role. To update it, please contact our support team through the Support section.</p>
+          <p>Currently, your contact email is linked to your account role. To update it, please contact our support team through the Support section.</p>
         </div>
       </details>
       

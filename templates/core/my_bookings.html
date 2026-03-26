@@ -5,6 +5,9 @@
   <section class="page-head">
     <h1>My Bookings</h1>
     <p>All active and upcoming bookings.</p>
+    <p class="muted booking-refund-policy">
+      Paid tickets cancelled 2 or more days before the event get a full refund. Later cancellations receive a 50% refund to the original payment method.
+    </p>
   </section>
 
   <section class="card">
@@ -19,7 +22,6 @@
             <th>Applied Role</th>
             <th>Status</th>
             <th>Amount</th>
-            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -28,15 +30,12 @@
               <td class="booking-event-cell" data-label="Event">
                 <span class="booking-event-title">{{ booking.event.title }}</span>
                 <span class="booking-ticket-id">Ticket ID: {{ booking.ticket_reference }}</span>
-              </td>
-              <td data-label="Date">{{ booking.event.date|date_human }}</td>
-              <td data-label="Ticket Type">{{ booking.ticket_type.name|default:'Standard' }}</td>
-              <td data-label="Tickets">{{ booking.tickets }}</td>
-              <td data-label="Applied Role">{{ booking.applied_role_label }}</td>
-              <td data-label="Status"><span class="badge {{ booking.status|badge_class }}">{{ booking.status }}</span></td>
-              <td data-label="Amount">{{ booking.total_amount|money }}</td>
-              <td data-label="Action">
-                <div class="action-row">
+                {% if booking.latest_refund_payment %}
+                  <span class="booking-refund-note">
+                    Refund Ref: {{ booking.latest_refund_payment.transaction_ref|default:'-' }}
+                  </span>
+                {% endif %}
+                <div class="action-row booking-action-row">
                   <a href="{% url 'event_detail' booking.event.id %}" class="small-btn">View</a>
                   {% if booking.payment_status != 'paid' %}
                     <a href="{% url 'payment_page' booking.id %}" class="small-btn">Pay</a>
@@ -57,9 +56,28 @@
                   {% endif %}
                 </div>
               </td>
+              <td data-label="Date">{{ booking.event.date|date_human }}</td>
+              <td data-label="Ticket Type">{{ booking.ticket_type.name|default:'Standard' }}</td>
+              <td data-label="Tickets">{{ booking.tickets }}</td>
+              <td data-label="Applied Role">{{ booking.applied_role_label }}</td>
+              <td class="booking-status-cell" data-label="Status">
+                <div class="booking-status-stack">
+                  <span class="badge {{ booking.status|badge_class }}">{{ booking.status }}</span>
+                  <span class="badge {{ booking.payment_status|badge_class }}">{{ booking.payment_status }}</span>
+                </div>
+                {% if booking.latest_refund_payment %}
+                  <span class="booking-refund-meta">
+                    Refunded {{ booking.latest_refund_payment.amount|money }}
+                    {% if booking.latest_refund_payment.refunded_at %}
+                      on {{ booking.latest_refund_payment.refunded_at|datetime_human }}
+                    {% endif %}
+                  </span>
+                {% endif %}
+              </td>
+              <td data-label="Amount">{{ booking.total_amount|money }}</td>
             </tr>
           {% empty %}
-            <tr class="empty-row"><td colspan="8" class="empty-cell">No bookings found.</td></tr>
+            <tr class="empty-row"><td colspan="7" class="empty-cell">No bookings found.</td></tr>
           {% endfor %}
         </tbody>
       </table>

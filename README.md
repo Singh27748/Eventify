@@ -55,7 +55,7 @@ $env:RAZORPAY_KEY_SECRET="your-razorpay-key-secret"
 
 - User: `john@example.com` / `password123`
 - Organizer: `organizer@example.com` / `organizer123`
-- Admin: `admin@example.com` / `admin123`
+- Admin: `asing27748@gmail.com` / `admin123`
 
 ## Stack
 

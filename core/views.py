@@ -5,14 +5,17 @@ Views data le kar template ko render karte hain jo HTML mein dikhega user ko.
 """
 
 from datetime import datetime, timedelta
+import csv
 import hashlib
 from html import escape
 from io import BytesIO
+from itertools import chain
 import mimetypes
 from pathlib import Path
 import re
 import secrets
 import socket
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib import messages
@@ -36,9 +39,19 @@ from django.utils.text import slugify
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils import timezone
 from django.utils.dateparse import parse_date
+from django.http import JsonResponse
 from PIL import Image as PILImage, ImageDraw, ImageFont, ImageOps
 
-from .decorators import role_required, admin_required
+from .ai_support import (
+    SupportAIError,
+    build_fallback_handoff_summary,
+    build_support_ai_banner,
+    generate_admin_email_draft,
+    generate_user_support_reply,
+    get_support_ai_config,
+    summarize_support_conversation,
+)
+from .decorators import role_required, admin_required, organizer_or_admin_required
 from .integrations import (
     IntegrationError,
     build_github_auth_url,
@@ -58,11 +71,16 @@ from .integrations import (
 )
 from .models import (
     Booking,
+    AdvertisementSettings,
+    AdvertisementSlot,
+    AdvertisementSlotItem,
     Event,
+    EventAdvertisement,
     EventActivitySlot,
     EventCategory,
     EventHelperSlot,
     EventGallery,
+    HomepageHeroPromo,
     EventSchedule,
     Notification,
     OTPRequest,
@@ -71,11 +89,15 @@ from .models import (
     Profile,
     PromoCode,
     SecurityAuditLog,
+    SupportConversation,
+    SupportMessage,
+    SupportReply,
     SupportTicket,
     TicketType,
 )
 from .services import (
     create_notification,
+    format_money,
     generate_invoice_no,
     generate_otp,
     get_trending_events,
@@ -110,6 +132,44 @@ NEWSLETTER_CONTACT_RECIPIENTS = (  # Newsletter subscribe hone par email yahan j
     "2023bca136@axiscolleges.in",
     "asing27748@gmail.com",
 )
+DEFAULT_HOMEPAGE_HERO_PROMO = {
+    "eyebrow": "Event Advertisement",
+    "headline": "Discover the hottest events before the best seats disappear.",
+    "description": (
+        "Explore standout concerts, conferences, workshops and city experiences "
+        "through a cleaner promotional spotlight built from Eventify's live public events."
+    ),
+    "chip_one": "Trending Now",
+    "chip_two": "City Picks",
+    "chip_three": "Book Fast",
+    "image_source": "",
+}
+AUTH_ROLE_META = {
+    Profile.ROLE_USER: {
+        "label": "Attendee",
+        "icon": "U",
+        "login_description": "Browse events and manage bookings",
+        "register_description": "Book tickets and follow event updates",
+        "tone": "user",
+    },
+    Profile.ROLE_ORGANIZER: {
+        "label": "Event Organizer",
+        "icon": "O",
+        "login_description": "Create events and track participants",
+        "register_description": "Launch events and manage bookings",
+        "tone": "organizer",
+    },
+    Profile.ROLE_ADMIN: {
+        "label": "Admin",
+        "icon": "A",
+        "login_description": "Access users, payments and support",
+        "register_description": "",
+        "tone": "admin",
+    },
+}
+SUPPORT_CHAT_MESSAGE_MAX_LENGTH = 1200
+SUPPORT_REPLY_SUBJECT_MAX_LENGTH = 180
+SUPPORT_REPLY_BODY_MAX_LENGTH = 4000
 
 
 def ensure_seeded():
@@ -118,6 +178,31 @@ def ensure_seeded():
         return
     seed_demo_data()
     _seed_checked = True
+
+
+def get_advertisement_settings():
+    settings_obj = AdvertisementSettings.objects.order_by("id").first()
+    if not settings_obj:
+        settings_obj = AdvertisementSettings.objects.create()
+    return settings_obj
+
+
+def ensure_advertisement_slots(slot_count, default_rotation):
+    existing = {slot.slot_index: slot for slot in AdvertisementSlot.objects.all()}
+    slots = []
+    for index in range(0, slot_count):
+        slot = existing.get(index)
+        if not slot:
+            slot = AdvertisementSlot.objects.create(
+                slot_index=index,
+                rotation_seconds=default_rotation,
+            )
+        elif not slot.size or not slot.design:
+            slot.size = AdvertisementSlot.SIZE_STANDARD
+            slot.design = AdvertisementSlot.DESIGN_CLASSIC
+            slot.save(update_fields=["size", "design"])
+        slots.append(slot)
+    return slots
 
 
 def get_or_create_profile(user):
@@ -138,6 +223,75 @@ def clear_pending_2fa_session(request):
     request.session.pop("2fa_user_id", None)
     request.session.pop("2fa_expected_role", None)
     request.session.pop("2fa_auth_source", None)
+    request.session.pop("post_login_redirect", None)
+
+
+def _normalize_auth_tab(tab_value):
+    return "register" if tab_value == "register" else "login"
+
+
+def _allowed_auth_roles_for_tab(active_tab):
+    roles = [Profile.ROLE_USER, Profile.ROLE_ORGANIZER]
+    if active_tab == "login":
+        roles.append(Profile.ROLE_ADMIN)
+    return roles
+
+
+def _normalize_auth_role(active_tab, role_value):
+    allowed_roles = _allowed_auth_roles_for_tab(active_tab)
+    if role_value in allowed_roles:
+        return role_value
+    return Profile.ROLE_USER
+
+
+def _get_safe_next_url(request, raw_url):
+    next_url = (raw_url or "").strip()
+    if next_url and url_has_allowed_host_and_scheme(
+        next_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return next_url
+    return ""
+
+
+def _build_route_with_query(route_name, **params):
+    filtered_params = {key: value for key, value in params.items() if value not in (None, "")}
+    route = reverse(route_name)
+    if not filtered_params:
+        return route
+    return f"{route}?{urlencode(filtered_params)}"
+
+
+def _get_auth_role_copy(active_tab, role_value):
+    normalized_role = _normalize_auth_role(active_tab, role_value)
+    role_meta = AUTH_ROLE_META[normalized_role]
+    description_key = "register_description" if active_tab == "register" else "login_description"
+    return {
+        "value": normalized_role,
+        "label": role_meta["label"],
+        "icon": role_meta["icon"],
+        "description": role_meta[description_key],
+        "tone": role_meta["tone"],
+    }
+
+
+def _build_auth_role_cards(active_tab, next_url=""):
+    cards = []
+    for role_value in _allowed_auth_roles_for_tab(active_tab):
+        role_copy = _get_auth_role_copy(active_tab, role_value)
+        cards.append(
+            {
+                **role_copy,
+                "href": _build_route_with_query(
+                    "auth_page",
+                    tab=active_tab,
+                    role=role_copy["value"],
+                    next=next_url,
+                ),
+            }
+        )
+    return cards
 
 
 def begin_second_factor_challenge(request, user, profile, auth_source="password"):
@@ -146,8 +300,18 @@ def begin_second_factor_challenge(request, user, profile, auth_source="password"
     request.session["2fa_auth_source"] = (auth_source or "password").strip()
 
 
-def complete_login_after_primary_auth(request, user, profile, info_message=None, auth_source="password"):
+def complete_login_after_primary_auth(
+    request,
+    user,
+    profile,
+    info_message=None,
+    auth_source="password",
+    redirect_to="",
+):
+    safe_redirect_to = _get_safe_next_url(request, redirect_to)
     if profile.two_factor_enabled:
+        if safe_redirect_to:
+            request.session["post_login_redirect"] = safe_redirect_to
         begin_second_factor_challenge(request, user, profile, auth_source=auth_source)
         messages.info(
             request,
@@ -172,6 +336,15 @@ def complete_login_after_primary_auth(request, user, profile, info_message=None,
     elif user.email and not profile.email_verified:
         messages.warning(request, "Login successful. Please verify your email from Settings.")
     messages.success(request, "Login successful.")
+
+    if profile.role in (Profile.ROLE_USER, Profile.ROLE_ORGANIZER) and not profile.profile_completed:
+        if safe_redirect_to:
+            request.session["post_profile_redirect"] = safe_redirect_to
+        messages.info(request, "Please complete your profile to continue.")
+        return redirect("complete_profile")
+
+    if safe_redirect_to:
+        return redirect(safe_redirect_to)
     return redirect("dashboard")
 
 
@@ -372,8 +545,8 @@ def parse_ticket_sales_datetime(raw_value):
     return timezone.make_aware(naive_value, timezone.get_current_timezone()), ""
 
 
-def default_ticket_type_payloads(base_price):
-    base = max(0, int(base_price or 0))
+def default_ticket_type_payloads(base_price, min_price=1):
+    base = max(min_price, int(base_price or 0))
     vip_price = max(base + max(200, base // 2), base)
     early_bird_price = max(0, base - max(100, base // 5))
     return [
@@ -410,8 +583,8 @@ def default_ticket_type_payloads(base_price):
     ]
 
 
-def default_single_ticket_type_payload(base_price):
-    base = max(0, int(base_price or 0))
+def default_single_ticket_type_payload(base_price, min_price=1):
+    base = max(min_price, int(base_price or 0))
     return [
         {
             "id": None,
@@ -427,7 +600,7 @@ def default_single_ticket_type_payload(base_price):
     ]
 
 
-def build_ticket_type_form_rows(event=None, fallback_price=0):
+def build_ticket_type_form_rows(event=None, fallback_price=0, min_price=1):
     if event:
         existing_rows = list(
             event.ticket_types.order_by("display_order", "price", "id").values(
@@ -444,10 +617,10 @@ def build_ticket_type_form_rows(event=None, fallback_price=0):
         )
         if existing_rows:
             return existing_rows
-    return default_ticket_type_payloads(fallback_price)
+    return default_ticket_type_payloads(fallback_price, min_price=min_price)
 
 
-def parse_ticket_types_from_post(request):
+def parse_ticket_types_from_post(request, min_price=1):
     ticket_ids = request.POST.getlist("ticketTypeId[]") or request.POST.getlist("ticketTypeId")
     names = request.POST.getlist("ticketTypeName[]") or request.POST.getlist("ticketTypeName")
     prices = request.POST.getlist("ticketTypePrice[]") or request.POST.getlist("ticketTypePrice")
@@ -490,9 +663,11 @@ def parse_ticket_types_from_post(request):
         if not name:
             return None, "Ticket type name is required."
 
-        price = parse_positive_int(raw_price, minimum=0)
+        price = parse_positive_int(raw_price, minimum=min_price)
         if price is None:
-            return None, "Ticket type price must be a valid non-negative number."
+            if min_price <= 0:
+                return None, "Ticket type price must be 0 or greater."
+            return None, "Ticket type price must be greater than 0."
 
         total_quantity = parse_positive_int(raw_quantity, minimum=1)
         if total_quantity is None:
@@ -791,7 +966,8 @@ def validate_promo_for_amount(code, amount):
 
 
 def build_ticket_holder_name(user):
-    return (user.first_name or user.get_full_name().strip() or user.username or "Guest").strip()
+    full_name = (user.get_full_name() or "").strip()
+    return (full_name or user.first_name or user.username or "Guest").strip()
 
 
 def build_placeholder_profile_image(holder_name):
@@ -922,6 +1098,22 @@ def calculate_refund_amount(booking):
     if days_left >= 2:
         return amount_paid
     return max(0, amount_paid // 2)
+
+
+def attach_booking_payment_summaries(bookings):
+    for booking in bookings:
+        payment_records = list(getattr(booking, "prefetched_payments", []))
+        if not payment_records:
+            payment_records = list(booking.payments.order_by("-paid_at", "-id"))
+        booking.latest_paid_payment = next(
+            (item for item in payment_records if item.status == Payment.STATUS_PAID),
+            None,
+        )
+        booking.latest_refund_payment = next(
+            (item for item in payment_records if item.status == Payment.STATUS_REFUNDED),
+            None,
+        )
+    return bookings
 
 
 def build_active_activity_form_rows(event=None):
@@ -1226,9 +1418,45 @@ def normalize_security_answer(raw_value):
     return " ".join((raw_value or "").strip().lower().split())
 
 
+def verify_session_otp(request, *, session_key, purpose, entered_code, user, label):
+    normalized_code = (entered_code or "").strip()
+    if not normalized_code:
+        return False, f"Please enter the {label} OTP."
+
+    otp_request_id = request.session.get(session_key)
+    if not otp_request_id:
+        return False, f"{label} OTP was not requested. Please request a new OTP."
+
+    otp_request = OTPRequest.objects.filter(
+        id=otp_request_id,
+        purpose=purpose,
+        user=user,
+        is_used=False,
+    ).first()
+
+    if not otp_request:
+        request.session.pop(session_key, None)
+        return False, f"{label} OTP request not found. Please request a new OTP."
+
+    if otp_request.is_expired():
+        otp_request.is_used = True
+        otp_request.save(update_fields=["is_used"])
+        request.session.pop(session_key, None)
+        return False, f"{label} OTP expired. Please request a new OTP."
+
+    if otp_request.otp != normalized_code:
+        return False, f"Invalid {label} OTP."
+
+    otp_request.is_used = True
+    otp_request.save(update_fields=["is_used"])
+    request.session.pop(session_key, None)
+    return True, ""
+
+
 def save_security_question(request):
     question = sanitize_text_input(request.POST.get("securityQuestion"), max_length=255)
     answer = normalize_security_answer(request.POST.get("securityAnswer"))
+    email_otp = request.POST.get("emailOtp")
     if not question or not answer:
         messages.error(request, "Please enter both security question and answer.")
         return redirect("settings")
@@ -1242,6 +1470,22 @@ def save_security_question(request):
         return redirect("settings")
 
     profile = get_or_create_profile(request.user)
+    if not (request.user.email or "").strip():
+        messages.error(request, "Please add your email in profile before setting security question.")
+        return redirect("profile")
+
+    email_ok, email_error = verify_session_otp(
+        request,
+        session_key="security_email_otp_id",
+        purpose=OTPRequest.PURPOSE_SECURITY_EMAIL,
+        entered_code=email_otp,
+        user=request.user,
+        label="Email",
+    )
+    if not email_ok:
+        messages.error(request, email_error)
+        return redirect("settings")
+
     profile.security_question = question
     profile.security_answer_hash = make_password(answer)
     profile.save(update_fields=["security_question", "security_answer_hash"])
@@ -1331,6 +1575,56 @@ def send_private_event_invitation_emails(request, event, recipients, is_update=F
                 body=body,
                 from_email=sender_email,
                 to=[recipient],
+            ).send(fail_silently=False)
+            sent_count += 1
+        except Exception:
+            failed_count += 1
+
+    return sent_count, failed_count
+
+
+def send_event_advertisement_emails(request, event):
+    recipients = list(
+        User.objects.exclude(email__exact="")
+        .exclude(email__isnull=True)
+        .values_list("email", flat=True)
+        .distinct()
+    )
+    if not recipients:
+        return 0, 0
+
+    event_link = request.build_absolute_uri(reverse("event_detail", args=[event.id]))
+    organizer_name = (
+        (event.organizer_name or "").strip()
+        or (event.created_by.get_full_name().strip() if event.created_by_id else "")
+        or "Event Organizer"
+    )
+    subject = f"Featured Event: {event.title}"
+    body = "\n".join(
+        [
+            "A new featured event is live on Eventify!",
+            "",
+            f"Event: {event.title}",
+            f"Date: {event.date.strftime('%d %b %Y')} | {event.time}",
+            f"Location: {event.location}",
+            f"Organizer: {organizer_name}",
+            f"Price: INR {int(event.price or 0):,}",
+            "",
+            f"View event details: {event_link}",
+            "",
+            "You're receiving this because you have an Eventify account.",
+        ]
+    )
+
+    sent_count = 0
+    failed_count = 0
+    for email in recipients:
+        try:
+            EmailMessage(
+                subject=subject,
+                body=body,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                to=[email],
             ).send(fail_silently=False)
             sent_count += 1
         except Exception:
@@ -1669,6 +1963,18 @@ def parse_ticket_reference(value):
     return candidate, event_id, booking_id
 
 
+def extract_ticket_token_from_value(value):
+    candidate = (value or "").strip()
+    if not candidate:
+        return ""
+    token_match = re.search(r"/ticket-scan/([^/?#]+)", candidate, flags=re.IGNORECASE)
+    if token_match and token_match.group(1):
+        return token_match.group(1)
+    if re.fullmatch(r"[A-Za-z0-9._:-]+", candidate):
+        return candidate
+    return ""
+
+
 def get_event_organizer_email(event):
     direct_email = (event.organizer_email or "").strip()
     if direct_email:
@@ -1718,8 +2024,8 @@ def send_public_scan_media_to_organizer(request, booking, uploaded_file, note_te
     reply_to = []
     if request.user.is_authenticated:
         sender_name = (
-            request.user.first_name
-            or request.user.get_full_name().strip()
+            request.user.get_full_name().strip()
+            or request.user.first_name
             or request.user.username
         )
         sender_contact = request.user.email or request.user.username
@@ -2034,6 +2340,85 @@ def build_invoice_pdf(booking, payment_records):
     return output.getvalue()
 
 
+def build_report_pdf(title, headers, rows):
+    page_width, page_height = 1240, 1754
+    margin_x = 80
+    margin_y = 90
+    header_height = 56
+    row_height = 44
+
+    title_font = _load_font(44, bold=True)
+    header_font = _load_font(24, bold=True)
+    body_font = _load_font(22)
+
+    def truncate_text(draw, value, font, max_width):
+        text = str(value or "")
+        if draw.textlength(text, font=font) <= max_width:
+            return text
+        ellipsis = "..."
+        max_width = max(0, max_width - draw.textlength(ellipsis, font=font))
+        trimmed = text
+        while trimmed and draw.textlength(trimmed, font=font) > max_width:
+            trimmed = trimmed[:-1]
+        return f"{trimmed}{ellipsis}" if trimmed else ellipsis
+
+    pages = []
+    column_count = max(1, len(headers))
+    available_width = page_width - (margin_x * 2)
+    column_width = available_width / column_count
+
+    def new_page():
+        page = PILImage.new("RGB", (page_width, page_height), "#f4f7ff")
+        draw = ImageDraw.Draw(page)
+        draw.rounded_rectangle(
+            (50, 50, page_width - 50, page_height - 50),
+            radius=32,
+            fill="#ffffff",
+            outline="#d6e0f8",
+            width=3,
+        )
+        draw.text((margin_x, margin_y), title, fill="#1d4eb8", font=title_font)
+        header_top = margin_y + 70
+        draw.rounded_rectangle(
+            (margin_x, header_top, page_width - margin_x, header_top + header_height),
+            radius=18,
+            fill="#eef3ff",
+            outline="#d6e0f8",
+            width=2,
+        )
+        for idx, header in enumerate(headers):
+            x = margin_x + (idx * column_width) + 10
+            draw.text(
+                (x, header_top + 14),
+                truncate_text(draw, header, header_font, column_width - 20),
+                fill="#1f2a44",
+                font=header_font,
+            )
+        return page, draw, header_top + header_height + 16
+
+    page, draw, current_y = new_page()
+
+    for row in rows:
+        if current_y + row_height > page_height - margin_y:
+            pages.append(page)
+            page, draw, current_y = new_page()
+        for idx, value in enumerate(row):
+            x = margin_x + (idx * column_width) + 10
+            draw.text(
+                (x, current_y + 10),
+                truncate_text(draw, value, body_font, column_width - 20),
+                fill="#1f2a44",
+                font=body_font,
+            )
+        current_y += row_height
+
+    pages.append(page)
+    output = BytesIO()
+    pages[0].save(output, format="PDF", save_all=True, append_images=pages[1:], resolution=150.0)
+    output.seek(0)
+    return output.getvalue()
+
+
 def render_app(request, template_name, active_page, context=None):
     profile = get_or_create_profile(request.user)
     profile_language = normalize_language(profile.language)
@@ -2081,6 +2466,37 @@ def public_events(request):
     )
 
 
+def build_homepage_hero_promo():
+    promo = HomepageHeroPromo.objects.filter(is_active=True).order_by("-created_at", "-id").first()
+    if not promo:
+        return dict(DEFAULT_HOMEPAGE_HERO_PROMO)
+    return {
+        "eyebrow": promo.eyebrow,
+        "headline": promo.headline,
+        "description": promo.description,
+        "chip_one": promo.chip_one,
+        "chip_two": promo.chip_two,
+        "chip_three": promo.chip_three,
+        "image_source": promo.image_source,
+    }
+
+
+def build_homepage_hero_grid(today, trending_events, featured_events, upcoming_events, limit=3):
+    hero_grid_events = []
+    seen_event_ids = set()
+    # Prioritize advertised/featured events in the hero grid so approvals surface immediately.
+    for event in chain(featured_events, trending_events, upcoming_events):
+        if not event or event.id in seen_event_ids:
+            continue
+        if event.date < today:
+            continue
+        seen_event_ids.add(event.id)
+        hero_grid_events.append(event)
+        if len(hero_grid_events) >= limit:
+            break
+    return hero_grid_events
+
+
 def home(request):
     ensure_seeded()
     query = (request.GET.get("q") or "").strip()
@@ -2126,7 +2542,58 @@ def home(request):
     if selected_category:
         searchable_events = searchable_events.filter(category__icontains=selected_category)
 
-    featured_events = searchable_events.order_by("date")[:4]
+    advertised_events = list(
+        searchable_events.filter(
+            date__gte=today,
+            advertisement__status=EventAdvertisement.STATUS_APPROVED,
+        ).order_by("advertisement__reviewed_at", "date")
+    )
+    ad_settings = get_advertisement_settings()
+    slot_count = max(1, min(ad_settings.slot_count or 2, 4))
+    ad_slots = ensure_advertisement_slots(slot_count, ad_settings.rotation_seconds)
+
+    def build_event_payload(event):
+        return {
+            "id": event.id,
+            "title": event.title,
+            "category": event.category,
+            "date": event.date.strftime("%d %b %Y"),
+            "location": event.location,
+            "price": format_money(event.price),
+            "image": event.image_source,
+            "url": reverse("event_detail", args=[event.id]),
+        }
+
+    slot_items = (
+        AdvertisementSlotItem.objects.select_related("advertisement__event", "slot")
+        .filter(
+            slot__in=ad_slots,
+            advertisement__status=EventAdvertisement.STATUS_APPROVED,
+        )
+        .order_by("slot__slot_index", "position", "id")
+    )
+    slot_event_map = {slot.slot_index: [] for slot in ad_slots}
+    for item in slot_items:
+        slot_event_map.setdefault(item.slot.slot_index, []).append(item.advertisement.event)
+
+    slot_payloads = []
+    for slot in ad_slots:
+        slot_events = slot_event_map.get(slot.slot_index, [])
+        slot_payloads.append(
+            {
+                "slot_index": slot.slot_index,
+                "rotation_seconds": slot.rotation_seconds,
+                "items": [build_event_payload(event) for event in slot_events],
+            }
+        )
+
+    featured_events = advertised_events[:4]
+    if len(featured_events) < 4:
+        fallback_events = list(
+            searchable_events.exclude(id__in=[event.id for event in featured_events])
+            .order_by("date")[: 4 - len(featured_events)]
+        )
+        featured_events += fallback_events
     trending_events_raw = get_trending_events(limit=12)
     trending_events = []
     normalized_query = query.lower()
@@ -2164,7 +2631,7 @@ def home(request):
     if selected_category:
         upcoming_events_qs = upcoming_events_qs.filter(category__icontains=selected_category)
     
-    upcoming_events = upcoming_events_qs.order_by("date")[:6]
+    upcoming_events = list(upcoming_events_qs.order_by("date")[:6])
     
     image_available_filter = Q(image_file__isnull=False) | (
         Q(image_url__isnull=False) & ~Q(image_url__exact="")
@@ -2191,6 +2658,91 @@ def home(request):
             .distinct()
             .order_by("category")
         )
+    hero_promo = build_homepage_hero_promo()
+    hero_primary_events = build_homepage_hero_grid(
+        today,
+        trending_events,
+        featured_events,
+        upcoming_events,
+        limit=1,
+    )
+    hero_primary_event = hero_primary_events[0] if hero_primary_events else None
+    hero_slot = next((slot for slot in ad_slots if slot.slot_index == 0), None)
+    hero_slot_events = slot_event_map.get(0, [])
+    hero_event = hero_slot_events[0] if hero_slot_events else hero_primary_event
+    hero_slot_design = hero_slot.design if hero_slot else AdvertisementSlot.DESIGN_CLASSIC
+
+    def _unique_future_events(events):
+        seen = set()
+        unique_events = []
+        for event in events:
+            if not event or event.id in seen:
+                continue
+            if event.date < today:
+                continue
+            seen.add(event.id)
+            unique_events.append(event)
+        return unique_events
+
+    fallback_candidates = _unique_future_events(
+        chain(featured_events, trending_events, upcoming_events, advertised_events)
+    )
+    fallback_items = [
+        build_event_payload(event)
+        for event in fallback_candidates
+        if not hero_event or event.id != hero_event.id
+    ]
+
+    ad_rotation_payload = {
+        "rotation_seconds": ad_settings.rotation_seconds,
+        "slot_count": slot_count,
+        "slots": slot_payloads,
+        "fallback_items": fallback_items,
+    }
+
+    used_event_ids = set()
+    if hero_event:
+        used_event_ids.add(hero_event.id)
+
+    promo_slots = []
+    fallback_index = 0
+    for slot in ad_slots:
+        if slot.slot_index == 0:
+            continue
+        slot_events = [
+            event for event in slot_event_map.get(slot.slot_index, []) if event.id not in used_event_ids
+        ]
+        event = slot_events[0] if slot_events else None
+        if not event and fallback_candidates:
+            while (
+                fallback_index < len(fallback_candidates)
+                and fallback_candidates[fallback_index].id in used_event_ids
+            ):
+                fallback_index += 1
+            if fallback_index < len(fallback_candidates):
+                event = fallback_candidates[fallback_index]
+                fallback_index += 1
+        if event:
+            used_event_ids.add(event.id)
+        promo_slots.append(
+            {
+                "event": event,
+                "slot_index": slot.slot_index,
+                "slot_size": slot.size,
+                "slot_design": slot.design,
+            }
+        )
+
+    hero_grid_events = []
+    if hero_event:
+        hero_grid_events.append(hero_event)
+    hero_grid_events.extend([slot["event"] for slot in promo_slots if slot["event"]])
+    hero_stats = [
+        {"label": "Featured", "value": len(featured_events)},
+        {"label": "Trending", "value": len(trending_events)},
+        {"label": "Upcoming", "value": len(upcoming_events)},
+        {"label": "Categories", "value": len(categories)},
+    ]
     testimonials = [
         {
             "name": "Priya Sharma",
@@ -2215,11 +2767,19 @@ def home(request):
             "query": query,
             "selected_category": selected_category,
             "categories": categories,
+            "hero_promo": hero_promo,
+            "hero_grid_events": hero_grid_events,
+            "hero_slot_design": hero_slot_design,
+            "hero_stats": hero_stats,
             "featured_events": featured_events,
             "trending_events": trending_events,
             "upcoming_events": upcoming_events,
             "past_events_album": past_events_album,
             "testimonials": testimonials,
+            "ad_rotation_payload": ad_rotation_payload,
+            "promo_slot_count": max(0, slot_count - 1),
+            "promo_slot_slice": f"1:{slot_count}",
+            "promo_slots": promo_slots,
         },
     )
 
@@ -2272,15 +2832,80 @@ def newsletter_subscribe(request):
     return redirect("home")
 
 
+def auth_role_page(request):
+    ensure_seeded()
+    active_tab = _normalize_auth_tab(request.GET.get("tab"))
+    next_url = _get_safe_next_url(request, request.GET.get("next"))
+    selected_role = _normalize_auth_role(active_tab, request.GET.get("role"))
+    role_cards = _build_auth_role_cards(active_tab, next_url=next_url)
+    return render(
+        request,
+        "core/auth_role_select.html",
+        {
+            "active_tab": active_tab,
+            "is_logged_in": request.user.is_authenticated,
+            "role_cards": role_cards,
+            "login_tab_url": _build_route_with_query(
+                "auth_role_page",
+                tab="login",
+                role=_normalize_auth_role("login", selected_role),
+                next=next_url,
+            ),
+            "register_tab_url": _build_route_with_query(
+                "auth_role_page",
+                tab="register",
+                role=_normalize_auth_role("register", selected_role),
+                next=next_url,
+            ),
+            "direct_auth_url": _build_route_with_query(
+                "auth_page",
+                tab=active_tab,
+                role=selected_role,
+                next=next_url,
+            ),
+            "role_prompt": (
+                "Choose the role you want to use for login."
+                if active_tab == "login"
+                else "Choose the account type you want to register."
+            ),
+        },
+    )
+
+
 def auth_page(request):
     ensure_seeded()
-    active_tab = "register" if request.GET.get("tab") == "register" else "login"
+    active_tab = _normalize_auth_tab(request.GET.get("tab"))
+    next_url = _get_safe_next_url(request, request.GET.get("next"))
+    selected_role = _normalize_auth_role(active_tab, request.GET.get("role"))
+    selected_role_copy = _get_auth_role_copy(active_tab, selected_role)
     return render(
         request,
         "core/auth.html",
         {
             "active_tab": active_tab,
             "is_logged_in": request.user.is_authenticated,
+            "selected_role": selected_role_copy["value"],
+            "selected_role_label": selected_role_copy["label"],
+            "selected_role_description": selected_role_copy["description"],
+            "change_role_url": _build_route_with_query(
+                "auth_role_page",
+                tab=active_tab,
+                role=selected_role,
+                next=next_url,
+            ),
+            "login_tab_url": _build_route_with_query(
+                "auth_page",
+                tab="login",
+                role=_normalize_auth_role("login", selected_role),
+                next=next_url,
+            ),
+            "register_tab_url": _build_route_with_query(
+                "auth_page",
+                tab="register",
+                role=_normalize_auth_role("register", selected_role),
+                next=next_url,
+            ),
+            "next_url": next_url,
         },
     )
 
@@ -2293,10 +2918,17 @@ def login_submit(request):
     role = (request.POST.get("role") or "").strip()
     contact = (request.POST.get("contact") or "").strip().lower()
     password = request.POST.get("password") or ""
+    next_url = _get_safe_next_url(request, request.POST.get("next"))
+    login_redirect_url = _build_route_with_query(
+        "auth_page",
+        tab="login",
+        role=_normalize_auth_role("login", role),
+        next=next_url,
+    )
 
     if not role or not contact or not password:
         messages.error(request, "Please fill all login fields.")
-        return redirect("/auth/?tab=login")
+        return redirect(login_redirect_url)
 
     locked_state, remaining_seconds = get_login_lockout(role, contact)
     if locked_state:
@@ -2310,7 +2942,7 @@ def login_submit(request):
             metadata={"role": role, "remaining_seconds": remaining_seconds},
         )
         messages.error(request, format_lockout_message(remaining_seconds))
-        return redirect("/auth/?tab=login")
+        return redirect(login_redirect_url)
 
     profile = find_profile_by_contact_role(contact, role)
     if not profile:
@@ -2329,9 +2961,9 @@ def login_submit(request):
         )
         if remaining:
             messages.error(request, format_lockout_message(remaining))
-            return redirect("/auth/?tab=login")
+            return redirect(login_redirect_url)
         messages.error(request, "Invalid credentials for selected role.")
-        return redirect("/auth/?tab=login")
+        return redirect(login_redirect_url)
 
     user = authenticate(request, username=profile.user.username, password=password)
     if not user:
@@ -2351,12 +2983,18 @@ def login_submit(request):
         )
         if remaining:
             messages.error(request, format_lockout_message(remaining))
-            return redirect("/auth/?tab=login")
+            return redirect(login_redirect_url)
         messages.error(request, "Invalid credentials for selected role.")
-        return redirect("/auth/?tab=login")
+        return redirect(login_redirect_url)
 
     clear_failed_logins(role, contact)
-    return complete_login_after_primary_auth(request, user, profile, auth_source="password")
+    return complete_login_after_primary_auth(
+        request,
+        user,
+        profile,
+        auth_source="password",
+        redirect_to=next_url,
+    )
 
 
 def send_otp_email(contact, otp_value, purpose, name=""):
@@ -2377,6 +3015,22 @@ If you didn't request this, please ignore this email."""
         message = f"""Hello {name or 'User'},
 
 Your OTP to delete your Eventify account is: {otp_value}
+
+This OTP will expire in 10 minutes.
+
+If you didn't request this, please secure your account immediately."""
+    elif purpose == OTPRequest.PURPOSE_SECURITY_EMAIL:
+        message = f"""Hello {name or 'User'},
+
+Your security question verification OTP for Eventify is: {otp_value}
+
+This OTP will expire in 10 minutes.
+
+If you didn't request this, please secure your account immediately."""
+    elif purpose == OTPRequest.PURPOSE_PASSWORD_EMAIL:
+        message = f"""Hello {name or 'User'},
+
+Your password change OTP for Eventify is: {otp_value}
 
 This OTP will expire in 10 minutes.
 
@@ -2414,26 +3068,37 @@ def register_send_otp(request):
     contact = (request.POST.get("contact") or "").strip().lower()
     password = request.POST.get("password") or ""
     confirm_password = request.POST.get("confirmPassword") or ""
+    register_redirect_url = _build_route_with_query(
+        "auth_page",
+        tab="register",
+        role=_normalize_auth_role("register", role),
+    )
 
     if not all([role, name, contact, password, confirm_password]):
         messages.error(request, "Please fill all registration fields.")
-        return redirect("/auth/?tab=register")
+        return redirect(register_redirect_url)
+
+    try:
+        validate_email(contact)
+    except ValidationError:
+        messages.error(request, "Please enter a valid email address.")
+        return redirect(register_redirect_url)
 
     if password != confirm_password:
         messages.error(request, "Password and confirm password do not match.")
-        return redirect("/auth/?tab=register")
+        return redirect(register_redirect_url)
 
     password_error_redirect = show_password_validation_error(
         request,
         password,
-        redirect_name="/auth/?tab=register",
+        redirect_name=register_redirect_url,
     )
     if password_error_redirect:
         return password_error_redirect
 
     if Profile.objects.filter(contact=contact, role=role).exists():
-        messages.error(request, "This email/phone is already registered for selected role.")
-        return redirect("/auth/?tab=register")
+        messages.error(request, "This email is already registered for selected role.")
+        return redirect(register_redirect_url)
 
     otp_value = generate_otp()
     request_obj = OTPRequest.objects.create(
@@ -2447,14 +3112,11 @@ def register_send_otp(request):
     )
     
     # Send OTP via email
-    if "@" in contact:
-        email_sent = send_otp_email(contact, otp_value, OTPRequest.PURPOSE_REGISTER, name)
-        if email_sent:
-            messages.success(request, "OTP sent to your email.")
-        else:
-            messages.warning(request, "Could not send email. You can still verify with the demo OTP.")
+    email_sent = send_otp_email(contact, otp_value, OTPRequest.PURPOSE_REGISTER, name)
+    if email_sent:
+        messages.success(request, "OTP sent to your email.")
     else:
-        messages.success(request, "OTP generated.")
+        messages.warning(request, "Could not send email. You can still verify with the demo OTP.")
     
     # Store in session for demo purposes
     request.session["last_otp_preview"] = {"request_id": request_obj.id, "otp": otp_value}
@@ -2511,7 +3173,7 @@ def verify_otp(request):
         if Profile.objects.filter(contact=otp_request.contact, role=otp_request.role).exists():
             otp_request.is_used = True
             otp_request.save(update_fields=["is_used"])
-            messages.error(request, "This email/phone is already registered for selected role.")
+            messages.error(request, "This email is already registered for selected role.")
             return redirect("auth_page")
 
         username = build_unique_auth_username(otp_request.contact, otp_request.role)
@@ -2519,15 +3181,15 @@ def verify_otp(request):
             username=username,
             first_name=username,
             last_name="",
-            email=otp_request.contact if "@" in otp_request.contact else "",
+            email=otp_request.contact,
             password=otp_request.password_hash,
         )
-        Profile.objects.update_or_create(
+        profile, _ = Profile.objects.update_or_create(
             user=user,
             defaults={
                 "role": otp_request.role,
                 "contact": otp_request.contact,
-                "phone": "" if "@" in otp_request.contact else otp_request.contact,
+                "phone": "",
             },
         )
         create_notification(
@@ -2541,6 +3203,8 @@ def verify_otp(request):
         request.session.pop("last_otp_preview", None)
         login(request, user)
         initialize_secure_session(request)
+        if profile.role in (Profile.ROLE_USER, Profile.ROLE_ORGANIZER):
+            request.session["post_profile_redirect"] = reverse("dashboard")
         record_audit_log(
             action="account_registered",
             summary="Account created after OTP verification.",
@@ -2551,6 +3215,9 @@ def verify_otp(request):
             metadata={"role": otp_request.role},
         )
         messages.success(request, "OTP verified. Auto login successful.")
+        if profile.role in (Profile.ROLE_USER, Profile.ROLE_ORGANIZER) and not profile.profile_completed:
+            messages.info(request, "Please complete your profile to continue.")
+            return redirect("complete_profile")
         return redirect("dashboard")
 
     otp_request.is_used = True
@@ -2574,12 +3241,18 @@ def forgot_password_send_otp(request):
     role = (request.POST.get("role") or "").strip()
     contact = (request.POST.get("contact") or "").strip().lower()
     if not role or not contact:
-        messages.error(request, "Please select role and enter email or phone.")
+        messages.error(request, "Please select role and enter your email.")
+        return redirect("forgot_password")
+
+    try:
+        validate_email(contact)
+    except ValidationError:
+        messages.error(request, "Please enter a valid email address.")
         return redirect("forgot_password")
 
     profile = find_profile_by_contact_role(contact, role)
     if not profile:
-        messages.error(request, "No account found for selected role with this email/phone.")
+        messages.error(request, "No account found for selected role with this email.")
         return redirect("forgot_password")
 
     user = profile.user
@@ -2728,6 +3401,7 @@ def dashboard(request):
             or 0,
             "pending_requests": bookings_qs.filter(status=Booking.STATUS_PENDING).count(),
         }
+        focus_event = events_qs.filter(date__gte=today).order_by("date", "id").first()
         recent_bookings = bookings_qs.order_by("-booking_date")[:6]
         upcoming_events = events_qs.order_by("date")[:4]
         revenue_rows = []
@@ -2766,6 +3440,7 @@ def dashboard(request):
             {
                 "role_mode": "organizer",
                 "stats": stats,
+                "focus_event": focus_event,
                 "recent_bookings": recent_bookings,
                 "upcoming_events": upcoming_events,
                 "revenue_rows": revenue_rows,
@@ -2796,6 +3471,7 @@ def dashboard(request):
     recent_bookings = bookings_qs.order_by("-booking_date")[:6]
     # Only show public events in user dashboard
     upcoming_events = Event.objects.filter(date__gte=today, is_private=False).order_by("date")[:4]
+    focus_event = upcoming_events[0] if upcoming_events else None
 
     return render_app(
         request,
@@ -2804,6 +3480,7 @@ def dashboard(request):
         {
             "role_mode": "user",
             "stats": stats,
+            "focus_event": focus_event,
             "recent_bookings": recent_bookings,
             "upcoming_events": upcoming_events,
         },
@@ -3492,12 +4169,12 @@ def payment_pay(request, booking_id):
     )
     record_audit_log(
         action="payment_success",
-        summary=f"Razorpay payment completed for booking {booking.ticket_reference}.",
+        summary=f"Local payment completed for booking {booking.ticket_reference}.",
         category="payment",
         status="success",
         request=request,
         user=request.user,
-        metadata={"booking_id": booking.id, "payment_id": payment.id if payment else None, "method": RAZORPAY_METHOD},
+        metadata={"booking_id": booking.id, "payment_id": payment.id if payment else None, "method": method},
     )
     email_sent = send_booking_ticket_email(request, booking, payment)
     if email_sent:
@@ -3622,7 +4299,7 @@ def payment_verify(request, booking_id):
         status="success",
         request=request,
         user=request.user,
-        metadata={"booking_id": booking.id, "payment_id": payment.id if payment else None, "method": method},
+        metadata={"booking_id": booking.id, "payment_id": payment.id if payment else None, "method": RAZORPAY_METHOD},
     )
     email_sent = send_booking_ticket_email(request, booking, payment)
     if email_sent:
@@ -3899,11 +4576,19 @@ def my_bookings(request):
     if profile.role == Profile.ROLE_ORGANIZER:
         return redirect("organizer_bookings")
 
-    bookings = (
+    bookings = list(
         Booking.objects.filter(user=request.user)
         .select_related("event", "ticket_type")
+        .prefetch_related(
+            Prefetch(
+                "payments",
+                queryset=Payment.objects.order_by("-paid_at", "-id"),
+                to_attr="prefetched_payments",
+            )
+        )
         .order_by("event__date", "booking_date")
     )
+    attach_booking_payment_summaries(bookings)
     return render_app(
         request,
         "core/my_bookings.html",
@@ -3921,7 +4606,7 @@ def download_ticket_pdf(request, booking_id):
         messages.error(request, "Ticket PDF is available only for completed paid bookings.")
         return redirect("my_bookings")
 
-    holder_name = (request.user.first_name or request.user.username or "").strip()
+    holder_name = (request.user.get_full_name().strip() or request.user.username or "").strip()
     if not holder_name:
         messages.error(request, "User name is required for ticket PDF. Please update your profile.")
         return redirect("profile")
@@ -3966,6 +4651,86 @@ def ticket_lookup(request):
 
     token = generate_ticket_token(booking)
     return redirect("ticket_qr_scan", token=token)
+
+
+@role_required(Profile.ROLE_ORGANIZER)
+def ticket_recheck(request):
+    ensure_seeded()
+    raw_value = (request.GET.get("ticket") or request.GET.get("ticket_id") or "").strip()
+    result = None
+    status_label = ""
+    status_tone = ""
+
+    if raw_value:
+        booking = None
+        parsed_ticket = parse_ticket_reference(raw_value)
+        if parsed_ticket:
+            _ticket_ref, event_id, booking_id = parsed_ticket
+            booking = (
+                Booking.objects.select_related("event", "user", "user__profile", "ticket_type")
+                .filter(
+                    id=booking_id,
+                    event_id=event_id,
+                    event__created_by=request.user,
+                )
+                .first()
+            )
+        else:
+            token = extract_ticket_token_from_value(raw_value)
+            payload = parse_ticket_token(token)
+            if payload:
+                booking = (
+                    Booking.objects.select_related("event", "user", "user__profile", "ticket_type")
+                    .filter(
+                        id=payload.get("booking_id"),
+                        event_id=payload.get("event_id"),
+                        user_id=payload.get("user_id"),
+                        event__created_by=request.user,
+                    )
+                    .first()
+                )
+                if booking and payload.get("ticket_reference"):
+                    parsed_payload_ref = parse_ticket_reference(payload.get("ticket_reference"))
+                    parsed_booking_ref = parse_ticket_reference(booking.ticket_reference)
+                    if not parsed_payload_ref or not parsed_booking_ref:
+                        booking = None
+                    elif parsed_payload_ref[1] != parsed_booking_ref[1] or parsed_payload_ref[2] != parsed_booking_ref[2]:
+                        booking = None
+
+        if not booking:
+            status_label = "Invalid"
+            status_tone = "error"
+        else:
+            if booking.status == Booking.STATUS_CANCELLED or booking.payment_status != Booking.PAYMENT_PAID:
+                status_label = "Invalid"
+                status_tone = "error"
+            elif booking.status == Booking.STATUS_COMPLETED or booking.attendance_marked_at:
+                status_label = "Used"
+                status_tone = "warning"
+            else:
+                status_label = "Valid"
+                status_tone = "success"
+
+            result = {
+                "booking": booking,
+                "event": booking.event,
+                "user": booking.user,
+                "ticket_id": booking.ticket_reference,
+                "status_label": status_label,
+                "status_tone": status_tone,
+            }
+
+    return render_app(
+        request,
+        "core/ticket_recheck.html",
+        "ticket-recheck",
+        {
+            "ticket_value": raw_value,
+            "result": result,
+            "status_label": status_label,
+            "status_tone": status_tone,
+        },
+    )
 
 
 def ticket_qr_scan(request, token):
@@ -4015,7 +4780,7 @@ def ticket_qr_scan(request, token):
         )
 
     holder_profile = Profile.objects.filter(user=booking.user).first()
-    holder_name = booking.user.first_name or booking.user.username
+    holder_name = booking.user.get_full_name().strip() or booking.user.username
     holder_photo_url = ""
     if holder_profile and holder_profile.profile_image:
         holder_photo_url = holder_profile.profile_image.url
@@ -4165,8 +4930,21 @@ def cancel_booking(request, booking_id):
                     if refund_mode == "full"
                     else "Automatic partial refund processed after booking cancellation."
                 ),
+                upi_id=(latest_paid_payment.upi_id if latest_paid_payment else ""),
                 coupon_code=(latest_paid_payment.coupon_code if latest_paid_payment else ""),
                 discount_amount=(latest_paid_payment.discount_amount if latest_paid_payment else 0),
+                payment_meta={
+                    "refund_mode": refund_mode,
+                    "refund_destination_summary": (
+                        latest_paid_payment.method_detail_summary if latest_paid_payment else ""
+                    ),
+                    "original_transaction_ref": (
+                        latest_paid_payment.transaction_ref if latest_paid_payment else ""
+                    ),
+                    "original_gateway_payment_id": (
+                        latest_paid_payment.gateway_payment_id if latest_paid_payment else ""
+                    ),
+                },
                 refunded_at=timezone.now(),
             )
 
@@ -4225,28 +5003,154 @@ def event_history(request):
     )
 
 
+def _parse_filter_id(raw_value):
+    raw = (raw_value or "").strip()
+    if not raw or not raw.isdigit():
+        return None
+    return int(raw)
+
+
+def build_organizer_payment_queryset(request):
+    user_filter = _parse_filter_id(request.GET.get("user"))
+    event_filter = _parse_filter_id(request.GET.get("event"))
+    start_raw = (request.GET.get("start") or "").strip()
+    end_raw = (request.GET.get("end") or "").strip()
+    start_date = parse_date(start_raw) if start_raw else None
+    end_date = parse_date(end_raw) if end_raw else None
+
+    records = (
+        Payment.objects.select_related(
+            "booking",
+            "booking__event",
+            "booking__user",
+            "booking__user__profile",
+            "booking__ticket_type",
+        )
+        .filter(booking__event__created_by=request.user)
+        .order_by("-paid_at", "-id")
+    )
+
+    if user_filter:
+        records = records.filter(booking__user_id=user_filter)
+    if event_filter:
+        records = records.filter(booking__event_id=event_filter)
+    if start_date:
+        records = records.filter(paid_at__date__gte=start_date)
+    if end_date:
+        records = records.filter(paid_at__date__lte=end_date)
+
+    filters = {
+        "user": user_filter,
+        "event": event_filter,
+        "start": start_raw,
+        "end": end_raw,
+    }
+
+    return records, filters
+
+
 @login_required(login_url="auth_page")
 def payment_history(request):
     ensure_seeded()
     profile = get_or_create_profile(request.user)
     if profile.role == Profile.ROLE_ORGANIZER:
-        records = (
-            Payment.objects.select_related("booking", "booking__event", "booking__user", "booking__ticket_type")
-            .filter(booking__event__created_by=request.user)
-            .order_by("-paid_at", "-id")
+        records, filters = build_organizer_payment_queryset(request)
+        organizer_users = (
+            User.objects.filter(bookings__event__created_by=request.user)
+            .distinct()
+            .order_by("first_name", "last_name", "username")
         )
+        organizer_events = (
+            Event.objects.filter(created_by=request.user).order_by("date", "title")
+        )
+        filter_params = {
+            key: value
+            for key, value in filters.items()
+            if value
+        }
+        filter_query = urlencode(filter_params)
     else:
         records = (
             Payment.objects.select_related("booking", "booking__event", "booking__ticket_type")
             .filter(booking__user=request.user)
             .order_by("-paid_at", "-id")
         )
+        filters = {}
+        organizer_users = []
+        organizer_events = []
+        filter_query = ""
     return render_app(
         request,
         "core/payment_history.html",
         "payment-history",
-        {"records": records, "mode": profile.role},
+        {
+            "records": records,
+            "mode": profile.role,
+            "filters": filters,
+            "filter_query": filter_query,
+            "filter_users": organizer_users,
+            "filter_events": organizer_events,
+        },
     )
+
+
+@role_required(Profile.ROLE_ORGANIZER)
+def payment_history_export_csv(request):
+    ensure_seeded()
+    records, _filters = build_organizer_payment_queryset(request)
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = 'attachment; filename="organizer-payment-history.csv"'
+    writer = csv.writer(response)
+    writer.writerow(
+        [
+            "Date",
+            "User",
+            "Email",
+            "Event",
+            "Amount",
+            "Status",
+            "Method",
+            "Transaction ID",
+        ]
+    )
+    for item in records:
+        payment_date = item.refunded_at if item.status == Payment.STATUS_REFUNDED else item.paid_at
+        writer.writerow(
+            [
+                timezone.localtime(payment_date).strftime("%d %b %Y, %I:%M %p") if payment_date else "-",
+                item.booking.user.get_full_name() or item.booking.user.username,
+                item.booking.user.email or "-",
+                item.booking.event.title,
+                item.amount,
+                item.status,
+                item.method or "-",
+                item.transaction_ref or "-",
+            ]
+        )
+    return response
+
+
+@role_required(Profile.ROLE_ORGANIZER)
+def payment_history_export_pdf(request):
+    ensure_seeded()
+    records, _filters = build_organizer_payment_queryset(request)
+    headers = ["Date", "User", "Event", "Amount", "Status"]
+    rows = []
+    for item in records:
+        payment_date = item.refunded_at if item.status == Payment.STATUS_REFUNDED else item.paid_at
+        rows.append(
+            [
+                timezone.localtime(payment_date).strftime("%d %b %Y") if payment_date else "-",
+                item.booking.user.get_full_name() or item.booking.user.username,
+                item.booking.event.title,
+                f"INR {int(item.amount or 0):,}",
+                item.status.title(),
+            ]
+        )
+    pdf_bytes = build_report_pdf("Organizer Payment History", headers, rows)
+    response = HttpResponse(pdf_bytes, content_type="application/pdf")
+    response["Content-Disposition"] = 'attachment; filename="organizer-payment-history.pdf"'
+    return response
 
 
 @login_required(login_url="auth_page")
@@ -4307,14 +5211,86 @@ def download_invoice(request, booking_id):
 
 
 @login_required(login_url="auth_page")
+def complete_profile(request):
+    ensure_seeded()
+    profile = get_or_create_profile(request.user)
+
+    if profile.role == Profile.ROLE_ADMIN:
+        return redirect("dashboard")
+
+    if profile.profile_completed and request.method == "GET":
+        return redirect("dashboard")
+
+    if request.method == "POST":
+        first_name = sanitize_text_input(request.POST.get("first_name"), max_length=150)
+        last_name = sanitize_text_input(request.POST.get("last_name"), max_length=150)
+        uploaded = request.FILES.get("profile_image")
+
+        if not first_name or not last_name:
+            messages.error(request, "First name and last name are required.")
+            return redirect("complete_profile")
+
+        if uploaded:
+            upload_error = validate_image_upload(
+                uploaded,
+                label="Profile image",
+                max_size_bytes=2 * 1024 * 1024,
+            )
+            if upload_error:
+                messages.error(request, upload_error)
+                return redirect("complete_profile")
+
+        request.user.first_name = first_name
+        request.user.last_name = last_name
+        request.user.save(update_fields=["first_name", "last_name"])
+
+        update_fields = ["profile_completed"]
+        profile.profile_completed = True
+        if uploaded:
+            profile.profile_image = uploaded
+            update_fields.append("profile_image")
+        profile.save(update_fields=update_fields)
+
+        record_audit_log(
+            action="profile_completed",
+            summary="Profile completion submitted.",
+            category="account",
+            status="success",
+            request=request,
+            user=request.user,
+        )
+
+        messages.success(request, "Profile completed successfully.")
+        redirect_target = request.session.pop("post_profile_redirect", "")
+        safe_target = _get_safe_next_url(request, redirect_target)
+        return redirect(safe_target or "dashboard")
+
+    return render(
+        request,
+        "core/complete_profile.html",
+        {
+            "current_profile": profile,
+        },
+    )
+
+
+@login_required(login_url="auth_page")
 def profile_view(request):
     ensure_seeded()
     profile = get_or_create_profile(request.user)
+    if profile.role in (Profile.ROLE_USER, Profile.ROLE_ORGANIZER) and not profile.profile_completed:
+        return redirect("complete_profile")
     if request.method == "POST":
+        first_name = sanitize_text_input(request.POST.get("first_name"), max_length=150)
+        last_name = sanitize_text_input(request.POST.get("last_name"), max_length=150)
         username = (request.POST.get("username") or "").strip().lower()
         email = (request.POST.get("email") or "").strip()
         phone = (request.POST.get("phone") or "").strip()
         address = (request.POST.get("address") or "").strip()
+
+        if not first_name or not last_name:
+            messages.error(request, "First name and last name are required.")
+            return redirect("profile")
 
         if not username:
             messages.error(request, "Username is required.")
@@ -4353,8 +5329,8 @@ def profile_view(request):
 
         # Keep auth name fields normalized for consistency with username-based identity.
         request.user.username = username
-        request.user.first_name = username
-        request.user.last_name = ""
+        request.user.first_name = first_name
+        request.user.last_name = last_name
         request.user.email = email
         request.user.save(update_fields=["username", "first_name", "last_name", "email"])
 
@@ -4366,6 +5342,9 @@ def profile_view(request):
         if uploaded:
             profile.profile_image = uploaded
             update_fields.append("profile_image")
+        if not profile.profile_completed:
+            profile.profile_completed = True
+            update_fields.append("profile_completed")
         profile.save(update_fields=update_fields)
         record_audit_log(
             action="profile_updated",
@@ -4401,6 +5380,7 @@ def settings_password(request):
     old_password = request.POST.get("oldPassword") or ""
     new_password = request.POST.get("newPassword") or ""
     confirm_password = request.POST.get("confirmPassword") or ""
+    email_otp = request.POST.get("emailOtp") or ""
 
     if not all([old_password, new_password, confirm_password]):
         messages.error(request, "Please fill all password fields.")
@@ -4431,6 +5411,22 @@ def settings_password(request):
     if password_error_redirect:
         return password_error_redirect
 
+    if not email_otp:
+        messages.error(request, "Please enter the Email OTP to change password.")
+        return redirect("settings")
+
+    email_verified, email_error = verify_session_otp(
+        request,
+        session_key="password_email_otp_id",
+        purpose=OTPRequest.PURPOSE_PASSWORD_EMAIL,
+        entered_code=email_otp,
+        user=request.user,
+        label="Email",
+    )
+    if not email_verified:
+        messages.error(request, email_error)
+        return redirect("settings")
+
     request.user.set_password(new_password)
     request.user.save(update_fields=["password"])
     create_notification(
@@ -4454,11 +5450,99 @@ def settings_password(request):
 
 
 @login_required(login_url="auth_page")
+def settings_password_send_otp(request):
+    ensure_seeded()
+    if request.method != "POST":
+        return redirect("settings")
+
+    channel = (request.POST.get("channel") or "").strip().lower()
+    profile = get_or_create_profile(request.user)
+    if channel and channel != "email":
+        messages.error(request, "Only email OTP is supported for password changes.")
+        return redirect("settings")
+
+    account_email = (request.user.email or "").strip().lower()
+    if not account_email:
+        messages.error(request, "Please add your email in profile before requesting OTP.")
+        return redirect("profile")
+
+    otp_value = generate_otp()
+    otp_request = OTPRequest.objects.create(
+        purpose=OTPRequest.PURPOSE_PASSWORD_EMAIL,
+        contact=account_email,
+        role=profile.role,
+        user=request.user,
+        otp=otp_value,
+        expires_at=timezone.now() + timedelta(minutes=10),
+    )
+    email_sent = send_otp_email(
+        account_email,
+        otp_value,
+        OTPRequest.PURPOSE_PASSWORD_EMAIL,
+        request.user.get_full_name() or request.user.username,
+    )
+    if email_sent:
+        messages.success(request, "Email OTP sent successfully.")
+    else:
+        messages.warning(
+            request,
+            f"Could not send email right now. For demo, use OTP {otp_value}.",
+        )
+        request.session["last_otp_preview"] = {"request_id": otp_request.id, "otp": otp_value}
+    request.session["password_email_otp_id"] = otp_request.id
+    return redirect("settings")
+
+
+@login_required(login_url="auth_page")
 def settings_security_question(request):
     ensure_seeded()
     if request.method != "POST":
         return redirect("settings")
     return save_security_question(request)
+
+
+@login_required(login_url="auth_page")
+def settings_security_send_otp(request):
+    ensure_seeded()
+    if request.method != "POST":
+        return redirect("settings")
+
+    channel = (request.POST.get("channel") or "").strip().lower()
+    profile = get_or_create_profile(request.user)
+    if channel and channel != "email":
+        messages.error(request, "Only email OTP is supported for security questions.")
+        return redirect("settings")
+
+    account_email = (request.user.email or "").strip().lower()
+    if not account_email:
+        messages.error(request, "Please add your email in profile before requesting OTP.")
+        return redirect("profile")
+
+    otp_value = generate_otp()
+    otp_request = OTPRequest.objects.create(
+        purpose=OTPRequest.PURPOSE_SECURITY_EMAIL,
+        contact=account_email,
+        role=profile.role,
+        user=request.user,
+        otp=otp_value,
+        expires_at=timezone.now() + timedelta(minutes=10),
+    )
+    email_sent = send_otp_email(
+        account_email,
+        otp_value,
+        OTPRequest.PURPOSE_SECURITY_EMAIL,
+        request.user.get_full_name() or request.user.username,
+    )
+    if email_sent:
+        messages.success(request, "Email OTP sent successfully.")
+    else:
+        messages.warning(
+            request,
+            f"Could not send email right now. For demo, use OTP {otp_value}.",
+        )
+        request.session["last_otp_preview"] = {"request_id": otp_request.id, "otp": otp_value}
+    request.session["security_email_otp_id"] = otp_request.id
+    return redirect("settings")
 
 
 @login_required(login_url="auth_page")
@@ -4518,6 +5602,81 @@ def notification_mark_read(request, notification_id):
     return redirect("notifications")
 
 
+def _support_json_error(message, status=400, *, assistant_available=True):
+    return JsonResponse(
+        {
+            "ok": False,
+            "error": message,
+            "assistant_available": assistant_available,
+        },
+        status=status,
+    )
+
+
+def _get_active_support_conversation(user):
+    return (
+        SupportConversation.objects.filter(user=user, status=SupportConversation.STATUS_ACTIVE)
+        .prefetch_related("messages")
+        .first()
+    )
+
+
+def _derive_support_conversation_title(conversation):
+    if (conversation.title or "").strip():
+        return conversation.title.strip()
+
+    first_user_message = (
+        conversation.messages.filter(sender_type=SupportMessage.SENDER_USER)
+        .order_by("id")
+        .values_list("content", flat=True)
+        .first()
+        or "Support Request"
+    )
+    first_user_message = first_user_message.strip()
+    if len(first_user_message) <= 80:
+        return first_user_message
+    return f"{first_user_message[:77].rstrip()}..."
+
+
+def _serialize_support_message(message):
+    return {
+        "id": message.id,
+        "sender_type": message.sender_type,
+        "content": message.content,
+        "created_at": timezone.localtime(message.created_at).strftime("%d %b %Y, %I:%M %p"),
+        "meta": message.meta or {},
+    }
+
+
+def _serialize_support_conversation(conversation):
+    if not conversation:
+        return None
+    return {
+        "id": conversation.id,
+        "status": conversation.status,
+        "title": _derive_support_conversation_title(conversation),
+        "model_provider": conversation.model_provider,
+        "model_name": conversation.model_name,
+        "last_summary": conversation.last_summary,
+        "messages": [_serialize_support_message(item) for item in conversation.messages.all()],
+    }
+
+
+def _get_support_reply_draft(ticket, admin_user=None):
+    queryset = ticket.replies.filter(status=SupportReply.STATUS_DRAFT)
+    if admin_user is not None:
+        queryset = queryset.filter(admin=admin_user)
+    return queryset.order_by("-updated_at", "-id").first()
+
+
+def _ensure_ai_support_summary(user, conversation):
+    try:
+        summary_payload = summarize_support_conversation(user, conversation)
+        return (summary_payload.get("content") or "").strip()[:1000]
+    except SupportAIError:
+        return build_fallback_handoff_summary(conversation)
+
+
 @login_required(login_url="auth_page")
 def support_view(request):
     ensure_seeded()
@@ -4557,11 +5716,187 @@ def support_view(request):
         return redirect(redirect_target)
 
     tickets = SupportTicket.objects.filter(user=request.user).order_by("-created_at")
+    active_conversation = _get_active_support_conversation(request.user)
     return render_app(
         request,
         "core/support.html",
         "support",
-        {"tickets": tickets},
+        {
+            "tickets": tickets,
+            "active_support_conversation": active_conversation,
+            "active_support_conversation_payload": _serialize_support_conversation(active_conversation),
+            "support_ai_banner": build_support_ai_banner(),
+        },
+    )
+
+
+@login_required(login_url="auth_page")
+def support_chat_start(request):
+    ensure_seeded()
+    if request.method != "POST":
+        return _support_json_error("Method not allowed.", status=405)
+
+    conversation = _get_active_support_conversation(request.user)
+    if not conversation:
+        config = get_support_ai_config()
+        conversation = SupportConversation.objects.create(
+            user=request.user,
+            title="",
+            model_provider=config.provider,
+            model_name=config.chat_model,
+        )
+        SupportMessage.objects.create(
+            conversation=conversation,
+            sender_type=SupportMessage.SENDER_SYSTEM,
+            content=(
+                "Hello! I am Eventify Support AI. Share your issue about bookings, payments, tickets, "
+                "events, or account settings. If needed, I can hand this chat to the support team."
+            ),
+        )
+        conversation = SupportConversation.objects.prefetch_related("messages").get(id=conversation.id)
+
+    return JsonResponse({"ok": True, "conversation": _serialize_support_conversation(conversation)})
+
+
+@login_required(login_url="auth_page")
+def support_chat_message(request, conversation_id):
+    ensure_seeded()
+    if request.method != "POST":
+        return _support_json_error("Method not allowed.", status=405)
+
+    conversation = get_object_or_404(
+        SupportConversation.objects.prefetch_related("messages"),
+        id=conversation_id,
+        user=request.user,
+    )
+    if conversation.status != SupportConversation.STATUS_ACTIVE:
+        return _support_json_error("This support conversation is no longer active.", status=409)
+
+    content = sanitize_text_input(
+        request.POST.get("message"),
+        max_length=SUPPORT_CHAT_MESSAGE_MAX_LENGTH,
+    )
+    if not content:
+        return _support_json_error("Please enter a message.", status=400)
+
+    SupportMessage.objects.create(
+        conversation=conversation,
+        sender_type=SupportMessage.SENDER_USER,
+        content=content,
+    )
+
+    title = _derive_support_conversation_title(conversation)
+    update_fields = []
+    if conversation.title != title:
+        conversation.title = title
+        update_fields.append("title")
+
+    try:
+        ai_payload = generate_user_support_reply(request.user, conversation)
+    except SupportAIError as exc:
+        if update_fields:
+            conversation.save(update_fields=update_fields + ["updated_at"])
+        record_audit_log(
+            action="support_ai_reply_failed",
+            summary="AI support reply generation failed.",
+            category="account",
+            status="failure",
+            request=request,
+            user=request.user,
+            metadata={"conversation_id": conversation.id},
+        )
+        return _support_json_error(str(exc), status=503, assistant_available=False)
+
+    assistant_message = SupportMessage.objects.create(
+        conversation=conversation,
+        sender_type=SupportMessage.SENDER_ASSISTANT,
+        content=(ai_payload.get("content") or "").strip()[:SUPPORT_REPLY_BODY_MAX_LENGTH],
+        meta={
+            "model_provider": ai_payload.get("model_provider") or "",
+            "model_name": ai_payload.get("model_name") or "",
+        },
+    )
+    conversation.model_provider = (ai_payload.get("model_provider") or conversation.model_provider or "")[:40]
+    conversation.model_name = (ai_payload.get("model_name") or conversation.model_name or "")[:120]
+    update_fields.extend(["model_provider", "model_name", "updated_at"])
+    conversation.save(update_fields=list(dict.fromkeys(update_fields)))
+    if hasattr(conversation, "_prefetched_objects_cache"):
+        conversation._prefetched_objects_cache = {}
+
+    return JsonResponse(
+        {
+            "ok": True,
+            "conversation": _serialize_support_conversation(conversation),
+            "assistant_message": _serialize_support_message(assistant_message),
+        }
+    )
+
+
+@login_required(login_url="auth_page")
+def support_chat_handoff(request, conversation_id):
+    ensure_seeded()
+    if request.method != "POST":
+        return _support_json_error("Method not allowed.", status=405)
+
+    conversation = get_object_or_404(
+        SupportConversation.objects.prefetch_related("messages"),
+        id=conversation_id,
+        user=request.user,
+    )
+    if conversation.status != SupportConversation.STATUS_ACTIVE:
+        existing_ticket = SupportTicket.objects.filter(
+            user=request.user,
+            conversation=conversation,
+            source=SupportTicket.SOURCE_AI_HANDOFF,
+        ).order_by("-created_at").first()
+        if existing_ticket:
+            return JsonResponse(
+                {
+                    "ok": True,
+                    "ticket_id": existing_ticket.id,
+                    "ticket_subject": existing_ticket.subject,
+                    "redirect_url": reverse("support"),
+                }
+            )
+        return _support_json_error("This support conversation cannot be handed off.", status=409)
+
+    summary = _ensure_ai_support_summary(request.user, conversation)
+    subject = _derive_support_conversation_title(conversation)
+    conversation.title = subject
+    conversation.last_summary = summary
+    conversation.status = SupportConversation.STATUS_HANDED_OFF
+    conversation.save(update_fields=["title", "last_summary", "status", "updated_at"])
+
+    ticket = SupportTicket.objects.create(
+        user=request.user,
+        conversation=conversation,
+        subject=subject[:180] or "AI Support Request",
+        message=summary,
+        source=SupportTicket.SOURCE_AI_HANDOFF,
+        ai_summary=summary,
+    )
+    create_notification(
+        request.user,
+        "Support Ticket Created From AI Chat",
+        f"Your AI chat has been handed off to the support team as ticket #{ticket.id}.",
+        "support",
+    )
+    record_audit_log(
+        action="support_ai_handoff",
+        summary=f"AI support conversation handed off as ticket #{ticket.id}.",
+        category="account",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"conversation_id": conversation.id, "ticket_id": ticket.id},
+    )
+    return JsonResponse(
+        {
+            "ok": True,
+            "ticket_id": ticket.id,
+            "ticket_subject": ticket.subject,
+            "redirect_url": reverse("support"),
+        }
     )
 
 
@@ -4760,12 +6095,15 @@ def download_event_participants_excel(request, event_id):
     return response
 
 
-@role_required(Profile.ROLE_ORGANIZER)
+@organizer_or_admin_required
 def new_event(request):
     ensure_seeded()
     if request.method == "GET":
         event_type = (request.GET.get("event_type") or "public").strip()
         show_ticket_types = event_type != "private"
+        profile = get_or_create_profile(request.user)
+        is_admin = profile.role == Profile.ROLE_ADMIN
+        price_min = 0 if is_admin else 1
         return render_app(
             request,
             "core/new_event.html",
@@ -4777,7 +6115,11 @@ def new_event(request):
                 "active_activity_rows": build_active_activity_form_rows(),
                 "helper_activity_rows": build_helper_activity_form_rows(),
                 "show_ticket_types": show_ticket_types,
-                "ticket_type_rows": build_ticket_type_form_rows(fallback_price=0),
+                "ticket_type_rows": build_ticket_type_form_rows(fallback_price=0, min_price=price_min),
+                "advertisement_enabled": False,
+                "advertisement_status": "",
+                "price_min": price_min,
+                "is_admin": is_admin,
             },
         )
 
@@ -4807,6 +6149,10 @@ def new_event(request):
         price = int(request.POST.get("price") or 0)
     except ValueError:
         price = -1
+
+    profile = get_or_create_profile(request.user)
+    is_admin = profile.role == Profile.ROLE_ADMIN
+    price_min = 0 if is_admin else 1
 
     if not time_value and (request.POST.get("startTime") or request.POST.get("endTime")):
         messages.error(request, "Please choose valid start and end time.")
@@ -4849,12 +6195,18 @@ def new_event(request):
         if helper_activity_error:
             messages.error(request, helper_activity_error)
             return redirect("new_event")
-        ticket_type_rows, ticket_type_error = parse_ticket_types_from_post(request)
+        ticket_type_rows, ticket_type_error = parse_ticket_types_from_post(request, min_price=price_min)
         if ticket_type_error:
             messages.error(request, ticket_type_error)
             return redirect("new_event")
         if not ticket_type_rows:
-            ticket_type_rows = default_single_ticket_type_payload(price)
+            if price < price_min:
+                if price_min <= 0:
+                    messages.error(request, "Event ticket price must be 0 or greater.")
+                else:
+                    messages.error(request, "Event ticket price must be greater than 0.")
+                return redirect("new_event")
+            ticket_type_rows = default_single_ticket_type_payload(price, min_price=price_min)
     active_participants_required, active_participants_usage = summarize_active_activity_slots(
         active_activity_slots
     )
@@ -4872,7 +6224,6 @@ def new_event(request):
     if ticket_type_rows:
         public_base_price = min(item["price"] for item in ticket_type_rows)
 
-    profile = get_or_create_profile(request.user)
     event_data = {
         "title": title,
         "category": category,
@@ -4890,7 +6241,7 @@ def new_event(request):
         "active_participants_usage": active_participants_usage,
         "helpers_required": helpers_required,
         "helpers_usage": helpers_usage,
-        "organizer_name": request.user.first_name or request.user.username,
+        "organizer_name": request.user.get_full_name().strip() or request.user.username,
         "organizer_phone": profile.phone,
         "organizer_email": request.user.email,
         "created_by": request.user,
@@ -4942,6 +6293,22 @@ def new_event(request):
         )
         return redirect("private_event_payment_page", payment_id=payment.id)
 
+    advertise_requested = (
+        (request.POST.get("enableAdvertisement") or "").strip().lower() in {"1", "true", "on"}
+    )
+    if advertise_requested:
+        EventAdvertisement.objects.update_or_create(
+            event=event,
+            defaults={
+                "requested_by": request.user,
+                "status": EventAdvertisement.STATUS_PENDING,
+                "reviewed_by": None,
+                "reviewed_at": None,
+                "admin_note": "",
+            },
+        )
+        messages.info(request, "Advertisement request sent to admin for approval.")
+
     record_audit_log(
         action="event_created",
         summary=f"Event '{event.title}' created.",
@@ -4956,7 +6323,7 @@ def new_event(request):
     return redirect("my_events")
 
 
-@role_required(Profile.ROLE_ORGANIZER)
+@organizer_or_admin_required
 def edit_event(request, event_id):
     ensure_seeded()
     event = get_object_or_404(Event, id=event_id, created_by=request.user)
@@ -4967,8 +6334,19 @@ def edit_event(request, event_id):
         existing_private_payment = None
 
     if request.method == "GET":
+        profile = get_or_create_profile(request.user)
+        is_admin = profile.role == Profile.ROLE_ADMIN
+        price_min = 0 if is_admin else 1
         start_time_value, end_time_value = split_event_time_for_picker(event.time)
         show_ticket_types = not event.is_private
+        advertisement_status = ""
+        advertisement_enabled = False
+        if hasattr(event, "advertisement"):
+            advertisement_status = event.advertisement.status
+            advertisement_enabled = advertisement_status in (
+                EventAdvertisement.STATUS_PENDING,
+                EventAdvertisement.STATUS_APPROVED,
+            )
         return render_app(
             request,
             "core/new_event.html",
@@ -4981,7 +6359,15 @@ def edit_event(request, event_id):
                 "active_activity_rows": build_active_activity_form_rows(event),
                 "helper_activity_rows": build_helper_activity_form_rows(event),
                 "show_ticket_types": show_ticket_types,
-                "ticket_type_rows": build_ticket_type_form_rows(event=event, fallback_price=event.price),
+                "ticket_type_rows": build_ticket_type_form_rows(
+                    event=event,
+                    fallback_price=event.price,
+                    min_price=price_min,
+                ),
+                "advertisement_enabled": advertisement_enabled,
+                "advertisement_status": advertisement_status,
+                "price_min": price_min,
+                "is_admin": is_admin,
             },
         )
 
@@ -4999,6 +6385,10 @@ def edit_event(request, event_id):
         price = int(request.POST.get("price") or 0)
     except ValueError:
         price = -1
+
+    profile = get_or_create_profile(request.user)
+    is_admin = profile.role == Profile.ROLE_ADMIN
+    price_min = 0 if is_admin else 1
 
     if not time_value and (request.POST.get("startTime") or request.POST.get("endTime")):
         messages.error(request, "Please choose valid start and end time.")
@@ -5058,12 +6448,18 @@ def edit_event(request, event_id):
         if helper_activity_error:
             messages.error(request, helper_activity_error)
             return redirect("edit_event", event_id=event.id)
-        ticket_type_rows, ticket_type_error = parse_ticket_types_from_post(request)
+        ticket_type_rows, ticket_type_error = parse_ticket_types_from_post(request, min_price=price_min)
         if ticket_type_error:
             messages.error(request, ticket_type_error)
             return redirect("edit_event", event_id=event.id)
         if not ticket_type_rows:
-            ticket_type_rows = default_single_ticket_type_payload(price)
+            if price < price_min:
+                if price_min <= 0:
+                    messages.error(request, "Event ticket price must be 0 or greater.")
+                else:
+                    messages.error(request, "Event ticket price must be greater than 0.")
+                return redirect("edit_event", event_id=event.id)
+            ticket_type_rows = default_single_ticket_type_payload(price, min_price=price_min)
     active_participants_required, active_participants_usage = summarize_active_activity_slots(
         active_activity_slots
     )
@@ -5079,7 +6475,6 @@ def edit_event(request, event_id):
     )
     existing_guest_email_set = set(existing_guest_emails)
 
-    profile = get_or_create_profile(request.user)
     event.title = title
     event.category = category
     event.location = location
@@ -5096,7 +6491,7 @@ def edit_event(request, event_id):
     event.active_participants_usage = active_participants_usage
     event.helpers_required = helpers_required
     event.helpers_usage = helpers_usage
-    event.organizer_name = request.user.first_name or request.user.username
+    event.organizer_name = request.user.get_full_name().strip() or request.user.username
     event.organizer_phone = profile.phone
     event.organizer_email = request.user.email
 
@@ -5183,6 +6578,40 @@ def edit_event(request, event_id):
         )
         return redirect("private_event_payment_page", payment_id=private_payment.id)
 
+    advertise_requested = (
+        (request.POST.get("enableAdvertisement") or "").strip().lower() in {"1", "true", "on"}
+    )
+    if not is_private and advertise_requested:
+        existing_ad = EventAdvertisement.objects.filter(event=event).first()
+        if existing_ad:
+            if existing_ad.status == EventAdvertisement.STATUS_REJECTED:
+                existing_ad.status = EventAdvertisement.STATUS_PENDING
+                existing_ad.reviewed_by = None
+                existing_ad.reviewed_at = None
+                existing_ad.admin_note = ""
+                existing_ad.requested_by = request.user
+                existing_ad.save(
+                    update_fields=[
+                        "status",
+                        "reviewed_by",
+                        "reviewed_at",
+                        "admin_note",
+                        "requested_by",
+                    ]
+                )
+                messages.info(request, "Advertisement request resubmitted for approval.")
+            elif existing_ad.status == EventAdvertisement.STATUS_PENDING:
+                messages.info(request, "Advertisement request is already pending.")
+            else:
+                messages.info(request, "Advertisement is already approved for this event.")
+        else:
+            EventAdvertisement.objects.create(
+                event=event,
+                requested_by=request.user,
+                status=EventAdvertisement.STATUS_PENDING,
+            )
+            messages.info(request, "Advertisement request sent to admin for approval.")
+
     new_guest_recipients = [
         email for email in guest_email_list if email not in existing_guest_email_set
     ]
@@ -5256,17 +6685,134 @@ def delete_event(request, event_id):
 @role_required(Profile.ROLE_ORGANIZER)
 def organizer_bookings(request):
     ensure_seeded()
+    user_filter = _parse_filter_id(request.GET.get("user"))
+    event_filter = _parse_filter_id(request.GET.get("event"))
+    status_filter = (request.GET.get("status") or "").strip()
+
+    bookings = (
+        Booking.objects.filter(event__created_by=request.user)
+        .select_related("event", "user", "user__profile", "ticket_type")
+        .order_by("-booking_date")
+    )
+    if user_filter:
+        bookings = bookings.filter(user_id=user_filter)
+    if event_filter:
+        bookings = bookings.filter(event_id=event_filter)
+    if status_filter and status_filter in dict(Booking.STATUS_CHOICES):
+        bookings = bookings.filter(status=status_filter)
+
+    organizer_users = (
+        User.objects.filter(bookings__event__created_by=request.user)
+        .distinct()
+        .order_by("first_name", "last_name", "username")
+    )
+    organizer_events = Event.objects.filter(created_by=request.user).order_by("date", "title")
+    filters = {
+        "user": user_filter,
+        "event": event_filter,
+        "status": status_filter,
+    }
+    filter_query = urlencode({key: value for key, value in filters.items() if value})
+    return render_app(
+        request,
+        "core/organizer_bookings.html",
+        "organizer-bookings",
+        {
+            "bookings": bookings,
+            "filters": filters,
+            "filter_query": filter_query,
+            "filter_users": organizer_users,
+            "filter_events": organizer_events,
+            "status_choices": Booking.STATUS_CHOICES,
+        },
+    )
+
+
+@role_required(Profile.ROLE_ORGANIZER)
+def organizer_bookings_export_csv(request):
+    ensure_seeded()
+    user_filter = _parse_filter_id(request.GET.get("user"))
+    event_filter = _parse_filter_id(request.GET.get("event"))
+    status_filter = (request.GET.get("status") or "").strip()
     bookings = (
         Booking.objects.filter(event__created_by=request.user)
         .select_related("event", "user", "ticket_type")
         .order_by("-booking_date")
     )
-    return render_app(
-        request,
-        "core/organizer_bookings.html",
-        "organizer-bookings",
-        {"bookings": bookings},
+    if user_filter:
+        bookings = bookings.filter(user_id=user_filter)
+    if event_filter:
+        bookings = bookings.filter(event_id=event_filter)
+    if status_filter and status_filter in dict(Booking.STATUS_CHOICES):
+        bookings = bookings.filter(status=status_filter)
+
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = 'attachment; filename="organizer-bookings.csv"'
+    writer = csv.writer(response)
+    writer.writerow(
+        [
+            "Booking ID",
+            "Ticket ID",
+            "User",
+            "Email",
+            "Event",
+            "Status",
+            "Tickets",
+            "Amount",
+            "Booked On",
+        ]
     )
+    for booking in bookings:
+        writer.writerow(
+            [
+                booking.id,
+                booking.ticket_reference,
+                booking.user.get_full_name() or booking.user.username,
+                booking.user.email or "-",
+                booking.event.title,
+                booking.status,
+                booking.tickets,
+                booking.total_amount,
+                timezone.localtime(booking.booking_date).strftime("%d %b %Y, %I:%M %p"),
+            ]
+        )
+    return response
+
+
+@role_required(Profile.ROLE_ORGANIZER)
+def organizer_bookings_export_pdf(request):
+    ensure_seeded()
+    user_filter = _parse_filter_id(request.GET.get("user"))
+    event_filter = _parse_filter_id(request.GET.get("event"))
+    status_filter = (request.GET.get("status") or "").strip()
+    bookings = (
+        Booking.objects.filter(event__created_by=request.user)
+        .select_related("event", "user", "ticket_type")
+        .order_by("-booking_date")
+    )
+    if user_filter:
+        bookings = bookings.filter(user_id=user_filter)
+    if event_filter:
+        bookings = bookings.filter(event_id=event_filter)
+    if status_filter and status_filter in dict(Booking.STATUS_CHOICES):
+        bookings = bookings.filter(status=status_filter)
+
+    headers = ["Ticket ID", "User", "Event", "Tickets", "Status"]
+    rows = []
+    for booking in bookings:
+        rows.append(
+            [
+                booking.ticket_reference,
+                booking.user.get_full_name() or booking.user.username,
+                booking.event.title,
+                str(booking.tickets),
+                booking.status.title(),
+            ]
+        )
+    pdf_bytes = build_report_pdf("Organizer Bookings", headers, rows)
+    response = HttpResponse(pdf_bytes, content_type="application/pdf")
+    response["Content-Disposition"] = 'attachment; filename="organizer-bookings.pdf"'
+    return response
 
 
 @login_required(login_url="auth_page")
@@ -5342,7 +6888,7 @@ def delete_account(request):
                 account_email,
                 otp_value,
                 OTPRequest.PURPOSE_DELETE_ACCOUNT,
-                request.user.first_name or request.user.username,
+                request.user.get_full_name().strip() or request.user.username,
             )
             if email_sent:
                 messages.success(request, "OTP sent to your email. Enter OTP to confirm deletion.")
@@ -5484,6 +7030,368 @@ def admin_events(request):
 
 
 @admin_required
+def admin_advertisements(request):
+    """Admin page to review advertisement requests."""
+    ensure_seeded()
+    ad_settings = get_advertisement_settings()
+    slot_count = max(1, min(ad_settings.slot_count or 2, 4))
+    ad_slots = ensure_advertisement_slots(slot_count, ad_settings.rotation_seconds)
+    all_ads = (
+        EventAdvertisement.objects.select_related("event", "requested_by", "reviewed_by")
+        .all()
+        .order_by("-requested_at")
+    )
+    pending_ads = (
+        EventAdvertisement.objects.select_related("event", "requested_by")
+        .filter(status=EventAdvertisement.STATUS_PENDING)
+        .order_by("-requested_at")
+    )
+    approved_ads = list(
+        EventAdvertisement.objects.select_related("event", "requested_by", "reviewed_by")
+        .filter(status=EventAdvertisement.STATUS_APPROVED)
+        .order_by("-reviewed_at", "-requested_at")
+    )
+    slot_items = (
+        AdvertisementSlotItem.objects.select_related("slot")
+        .filter(slot__in=ad_slots)
+        .order_by("slot__slot_index", "position")
+    )
+    assignment_map = {
+        item.advertisement_id: (item.slot.slot_index, item.position) for item in slot_items
+    }
+    for item in approved_ads:
+        slot_info = assignment_map.get(item.id)
+        item.slot_index = slot_info[0] if slot_info else ""
+        item.slot_position = slot_info[1] if slot_info else ""
+    rejected_ads = (
+        EventAdvertisement.objects.select_related("event", "requested_by", "reviewed_by")
+        .filter(status=EventAdvertisement.STATUS_REJECTED)
+        .order_by("-reviewed_at", "-requested_at")
+    )
+    return render_app(
+        request,
+        "core/admin_advertisements.html",
+        "admin-ads",
+        {
+            "ad_settings": ad_settings,
+            "ad_slots": ad_slots,
+            "all_ads": all_ads,
+            "pending_ads": pending_ads,
+            "approved_ads": approved_ads,
+            "rejected_ads": rejected_ads,
+        },
+    )
+
+
+@admin_required
+def admin_advertisement_settings_update(request):
+    """Update homepage advertisement rotation settings."""
+    ensure_seeded()
+    if request.method != "POST":
+        return redirect("admin_advertisements")
+
+    rotation_raw = (request.POST.get("rotation_seconds") or "").strip()
+    slot_raw = (request.POST.get("slot_count") or "").strip()
+    try:
+        rotation_seconds = int(rotation_raw)
+    except ValueError:
+        rotation_seconds = -1
+    try:
+        slot_count = int(slot_raw)
+    except ValueError:
+        slot_count = -1
+
+    if rotation_seconds < 3 or rotation_seconds > 120:
+        messages.error(request, "Rotation time must be between 3 and 120 seconds.")
+        return redirect("admin_advertisements")
+    if slot_count < 1 or slot_count > 4:
+        messages.error(request, "Slot count must be between 1 and 4.")
+        return redirect("admin_advertisements")
+
+    ad_settings = get_advertisement_settings()
+    ad_settings.rotation_seconds = rotation_seconds
+    ad_settings.slot_count = slot_count
+    ad_settings.updated_by = request.user
+    ad_settings.save(update_fields=["rotation_seconds", "slot_count", "updated_by", "updated_at"])
+    ensure_advertisement_slots(slot_count, rotation_seconds)
+    AdvertisementSlot.objects.filter(slot_index__gte=slot_count).delete()
+
+    record_audit_log(
+        action="advertisement_settings_updated",
+        summary=f"Advertisement rotation set to {rotation_seconds}s with {slot_count} slot(s).",
+        category="admin",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"rotation_seconds": rotation_seconds, "slot_count": slot_count},
+    )
+    messages.success(request, "Advertisement rotation settings updated.")
+    return redirect("admin_advertisements")
+
+
+@admin_required
+def admin_advertisement_slots_update(request):
+    """Update per-slot rotation times and ad assignments."""
+    ensure_seeded()
+    if request.method != "POST":
+        return redirect("admin_advertisements")
+
+    ad_settings = get_advertisement_settings()
+    slot_count = max(1, min(ad_settings.slot_count or 2, 4))
+    ad_slots = ensure_advertisement_slots(slot_count, ad_settings.rotation_seconds)
+    slot_map = {slot.slot_index: slot for slot in ad_slots}
+
+    rotation_errors = False
+    for slot in ad_slots:
+        raw_value = (request.POST.get(f"slot_rotation_{slot.slot_index}") or "").strip()
+        size_value = (request.POST.get(f"slot_size_{slot.slot_index}") or "").strip().lower()
+        design_value = (request.POST.get(f"slot_design_{slot.slot_index}") or "").strip().lower()
+        try:
+            rotation_seconds = int(raw_value)
+        except ValueError:
+            rotation_seconds = -1
+        if rotation_seconds < 3 or rotation_seconds > 120:
+            rotation_errors = True
+            continue
+        if size_value not in {
+            AdvertisementSlot.SIZE_COMPACT,
+            AdvertisementSlot.SIZE_STANDARD,
+            AdvertisementSlot.SIZE_LARGE,
+            AdvertisementSlot.SIZE_WIDE,
+        }:
+            size_value = AdvertisementSlot.SIZE_STANDARD
+        if design_value not in {
+            AdvertisementSlot.DESIGN_CLASSIC,
+            AdvertisementSlot.DESIGN_GLASS,
+            AdvertisementSlot.DESIGN_BOLD,
+            AdvertisementSlot.DESIGN_SOFT,
+        }:
+            design_value = AdvertisementSlot.DESIGN_CLASSIC
+        slot.rotation_seconds = rotation_seconds
+        slot.size = size_value
+        slot.design = design_value
+        slot.updated_by = request.user
+        slot.save(update_fields=["rotation_seconds", "size", "design", "updated_by", "updated_at"])
+
+    if rotation_errors:
+        messages.error(request, "Slot rotation must be between 3 and 120 seconds.")
+        return redirect("admin_advertisements")
+
+    raw_ids = request.POST.getlist("ad_ids")
+    ad_ids = [int(value) for value in raw_ids if str(value).isdigit()]
+    approved_ads = (
+        EventAdvertisement.objects.filter(
+            id__in=ad_ids,
+            status=EventAdvertisement.STATUS_APPROVED,
+        )
+        .select_related("event")
+        .order_by("-reviewed_at")
+    )
+
+    AdvertisementSlotItem.objects.filter(slot__in=ad_slots).delete()
+
+    assignments = {slot_index: [] for slot_index in slot_map}
+    for ad in approved_ads:
+        slot_raw = (request.POST.get(f"assign_slot_{ad.id}") or "").strip()
+        try:
+            slot_index = int(slot_raw)
+        except ValueError:
+            slot_index = 0
+        if slot_index not in slot_map:
+            continue
+        order_raw = (request.POST.get(f"assign_order_{ad.id}") or "").strip()
+        try:
+            order_value = int(order_raw)
+            if order_value < 1:
+                order_value = None
+        except ValueError:
+            order_value = None
+        assignments[slot_index].append((order_value, ad))
+
+    for slot_index, items in assignments.items():
+        if not items:
+            continue
+        items.sort(key=lambda item: (item[0] is None, item[0] or 0))
+        current_position = 1
+        for order_value, ad in items:
+            if order_value is None or order_value < current_position:
+                order_value = current_position
+            AdvertisementSlotItem.objects.create(
+                slot=slot_map[slot_index],
+                advertisement=ad,
+                position=order_value,
+            )
+            current_position = order_value + 1
+
+    record_audit_log(
+        action="advertisement_slots_updated",
+        summary="Advertisement slot configuration updated.",
+        category="admin",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"slot_count": slot_count},
+    )
+    messages.success(request, "Advertisement slots updated.")
+    return redirect("admin_advertisements")
+
+
+@admin_required
+def admin_advertisement_update(request, ad_id):
+    """Approve or reject an advertisement request."""
+    ensure_seeded()
+    if request.method != "POST":
+        return redirect("admin_advertisements")
+
+    advertisement = get_object_or_404(EventAdvertisement, id=ad_id)
+    action = (request.POST.get("action") or "").strip().lower()
+    note = sanitize_text_input(request.POST.get("note"), max_length=255)
+
+    if action not in {"approve", "reject"}:
+        messages.error(request, "Invalid advertisement action.")
+        return redirect("admin_advertisements")
+
+    advertisement.reviewed_by = request.user
+    advertisement.reviewed_at = timezone.now()
+    advertisement.admin_note = note
+
+    if action == "approve":
+        advertisement.status = EventAdvertisement.STATUS_APPROVED
+        advertisement.save(update_fields=["status", "reviewed_by", "reviewed_at", "admin_note"])
+        if not advertisement.notified_at:
+            sent_count, failed_count = send_event_advertisement_emails(request, advertisement.event)
+            advertisement.notified_at = timezone.now()
+            advertisement.save(update_fields=["notified_at"])
+            if failed_count:
+                messages.warning(
+                    request,
+                    f"Approved. Emails sent: {sent_count}. Failed: {failed_count}.",
+                )
+            else:
+                messages.success(request, f"Approved and emailed {sent_count} users.")
+        else:
+            messages.success(request, "Advertisement approved.")
+        if advertisement.requested_by:
+            create_notification(
+                advertisement.requested_by,
+                "Advertisement Approved",
+                f"Your event '{advertisement.event.title}' was approved for advertisement.",
+                "event",
+            )
+    else:
+        advertisement.status = EventAdvertisement.STATUS_REJECTED
+        advertisement.save(update_fields=["status", "reviewed_by", "reviewed_at", "admin_note"])
+        messages.info(request, "Advertisement request rejected.")
+        if advertisement.requested_by:
+            create_notification(
+                advertisement.requested_by,
+                "Advertisement Rejected",
+                f"Your event '{advertisement.event.title}' advertisement request was rejected.",
+                "event",
+            )
+
+    record_audit_log(
+        action="advertisement_reviewed",
+        summary=f"Advertisement {action} for event '{advertisement.event.title}'.",
+        category="admin",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"event_id": advertisement.event_id, "status": advertisement.status},
+    )
+    return redirect("admin_advertisements")
+
+
+@admin_required
+def admin_advertisements_bulk(request):
+    """Bulk approve/reject advertisement requests."""
+    ensure_seeded()
+    if request.method != "POST":
+        return redirect("admin_advertisements")
+
+    action = (request.POST.get("bulk_action") or "").strip().lower()
+    note = sanitize_text_input(request.POST.get("bulk_note"), max_length=255)
+    raw_ids = request.POST.getlist("ad_ids")
+    ad_ids = [int(value) for value in raw_ids if str(value).isdigit()]
+
+    if action not in {"approve", "reject"}:
+        messages.error(request, "Please choose a valid bulk action.")
+        return redirect("admin_advertisements")
+
+    if not ad_ids:
+        messages.error(request, "Select at least one advertisement request.")
+        return redirect("admin_advertisements")
+
+    ads = (
+        EventAdvertisement.objects.select_related("event", "requested_by")
+        .filter(id__in=ad_ids)
+        .order_by("-requested_at")
+    )
+    if not ads.exists():
+        messages.error(request, "No valid advertisement requests selected.")
+        return redirect("admin_advertisements")
+
+    processed = 0
+    emailed = 0
+    failed = 0
+    for advertisement in ads:
+        advertisement.reviewed_by = request.user
+        advertisement.reviewed_at = timezone.now()
+        advertisement.admin_note = note
+
+        if action == "approve":
+            advertisement.status = EventAdvertisement.STATUS_APPROVED
+            advertisement.save(update_fields=["status", "reviewed_by", "reviewed_at", "admin_note"])
+            if not advertisement.notified_at:
+                sent_count, failed_count = send_event_advertisement_emails(request, advertisement.event)
+                advertisement.notified_at = timezone.now()
+                advertisement.save(update_fields=["notified_at"])
+                emailed += sent_count
+                failed += failed_count
+            if advertisement.requested_by:
+                create_notification(
+                    advertisement.requested_by,
+                    "Advertisement Approved",
+                    f"Your event '{advertisement.event.title}' was approved for advertisement.",
+                    "event",
+                )
+        else:
+            advertisement.status = EventAdvertisement.STATUS_REJECTED
+            advertisement.save(update_fields=["status", "reviewed_by", "reviewed_at", "admin_note"])
+            if advertisement.requested_by:
+                create_notification(
+                    advertisement.requested_by,
+                    "Advertisement Rejected",
+                    f"Your event '{advertisement.event.title}' advertisement request was rejected.",
+                    "event",
+                )
+
+        record_audit_log(
+            action="advertisement_reviewed",
+            summary=f"Advertisement {action} for event '{advertisement.event.title}'.",
+            category="admin",
+            status="success",
+            request=request,
+            user=request.user,
+            metadata={"event_id": advertisement.event_id, "status": advertisement.status},
+        )
+        processed += 1
+
+    if action == "approve":
+        if failed:
+            messages.warning(
+                request,
+                f"Bulk approved {processed} request(s). Emails sent: {emailed}. Failed: {failed}.",
+            )
+        else:
+            messages.success(request, f"Bulk approved {processed} request(s).")
+    else:
+        messages.info(request, f"Bulk rejected {processed} request(s).")
+
+    return redirect("admin_advertisements")
+
+
+@admin_required
 def admin_users(request):
     """Admin page to view all users."""
     ensure_seeded()
@@ -5530,7 +7438,11 @@ def admin_payments(request):
 def admin_support(request):
     """Admin page to view all support tickets."""
     ensure_seeded()
-    tickets = SupportTicket.objects.select_related("user").order_by("-created_at")
+    tickets = (
+        SupportTicket.objects.select_related("user", "conversation")
+        .prefetch_related("replies")
+        .order_by("-created_at")
+    )
     return render_app(
         request,
         "core/admin_support.html",
@@ -5540,10 +7452,171 @@ def admin_support(request):
 
 
 @admin_required
+def admin_support_detail(request, ticket_id):
+    ensure_seeded()
+    ticket = get_object_or_404(
+        SupportTicket.objects.select_related("user", "conversation")
+        .prefetch_related("conversation__messages", "replies__admin"),
+        id=ticket_id,
+    )
+    draft = _get_support_reply_draft(ticket, request.user)
+    return render_app(
+        request,
+        "core/admin_support_detail.html",
+        "admin-support",
+        {
+            "ticket": ticket,
+            "conversation_messages": ticket.conversation.messages.all() if ticket.conversation_id else [],
+            "draft_reply": draft,
+            "reply_history": ticket.replies.select_related("admin").all(),
+            "support_ai_banner": build_support_ai_banner(),
+        },
+    )
+
+
+@admin_required
+def admin_generate_support_reply(request, ticket_id):
+    ensure_seeded()
+    if request.method != "POST":
+        return redirect("admin_support_detail", ticket_id=ticket_id)
+
+    ticket = get_object_or_404(
+        SupportTicket.objects.select_related("user", "conversation")
+        .prefetch_related("conversation__messages"),
+        id=ticket_id,
+    )
+    try:
+        draft_payload = generate_admin_email_draft(ticket)
+    except SupportAIError as exc:
+        messages.error(request, str(exc))
+        return redirect("admin_support_detail", ticket_id=ticket.id)
+
+    draft = _get_support_reply_draft(ticket, request.user)
+    if draft:
+        draft.subject = (draft_payload.get("subject") or "").strip()[:SUPPORT_REPLY_SUBJECT_MAX_LENGTH]
+        draft.body = (draft_payload.get("body") or "").strip()[:SUPPORT_REPLY_BODY_MAX_LENGTH]
+        draft.ai_generated = True
+        draft.status = SupportReply.STATUS_DRAFT
+        draft.save(update_fields=["subject", "body", "ai_generated", "status", "updated_at"])
+    else:
+        draft = SupportReply.objects.create(
+            ticket=ticket,
+            admin=request.user,
+            subject=(draft_payload.get("subject") or "")[:SUPPORT_REPLY_SUBJECT_MAX_LENGTH],
+            body=(draft_payload.get("body") or "")[:SUPPORT_REPLY_BODY_MAX_LENGTH],
+            status=SupportReply.STATUS_DRAFT,
+            ai_generated=True,
+        )
+
+    record_audit_log(
+        action="support_ai_draft_generated",
+        summary=f"AI draft generated for support ticket #{ticket.id}.",
+        category="admin",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"ticket_id": ticket.id, "reply_id": draft.id},
+    )
+    messages.success(request, "AI draft reply generated. Review it before sending.")
+    return redirect("admin_support_detail", ticket_id=ticket.id)
+
+
+@admin_required
+def admin_send_support_reply(request, ticket_id):
+    ensure_seeded()
+    if request.method != "POST":
+        return redirect("admin_support_detail", ticket_id=ticket_id)
+
+    ticket = get_object_or_404(
+        SupportTicket.objects.select_related("user", "conversation"),
+        id=ticket_id,
+    )
+    reply_id = parse_positive_int(request.POST.get("reply_id"), minimum=0)
+    draft = None
+    if reply_id:
+        draft = SupportReply.objects.filter(id=reply_id, ticket=ticket, admin=request.user).first()
+    if not draft:
+        draft = _get_support_reply_draft(ticket, request.user)
+
+    subject = sanitize_text_input(
+        request.POST.get("subject"),
+        max_length=SUPPORT_REPLY_SUBJECT_MAX_LENGTH,
+    )
+    body = sanitize_text_input(
+        request.POST.get("body"),
+        max_length=SUPPORT_REPLY_BODY_MAX_LENGTH,
+    )
+    if not subject or not body:
+        messages.error(request, "Please provide both subject and reply body before sending.")
+        return redirect("admin_support_detail", ticket_id=ticket.id)
+
+    if draft:
+        draft.subject = subject
+        draft.body = body
+        draft.save(update_fields=["subject", "body", "updated_at"])
+    else:
+        draft = SupportReply.objects.create(
+            ticket=ticket,
+            admin=request.user,
+            subject=subject,
+            body=body,
+            status=SupportReply.STATUS_DRAFT,
+            ai_generated=False,
+        )
+
+    if not (ticket.user.email or "").strip():
+        messages.error(request, "User email is not configured. Draft saved but the reply was not sent.")
+        return redirect("admin_support_detail", ticket_id=ticket.id)
+
+    email = EmailMessage(
+        subject=subject,
+        body=body,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=[ticket.user.email],
+        reply_to=[settings.EMAIL_HOST_USER or settings.DEFAULT_FROM_EMAIL],
+    )
+    email.send(fail_silently=False)
+
+    draft.status = SupportReply.STATUS_SENT
+    draft.sent_at = timezone.now()
+    draft.save(update_fields=["status", "sent_at", "updated_at"])
+
+    if ticket.status == SupportTicket.STATUS_OPEN:
+        ticket.status = SupportTicket.STATUS_IN_PROGRESS
+        ticket.save(update_fields=["status"])
+
+    create_notification(
+        ticket.user,
+        "Support Reply Sent",
+        f"Our team sent an update on your support ticket '{ticket.subject}'. Please check your email.",
+        "support",
+    )
+    record_audit_log(
+        action="support_reply_sent",
+        summary=f"Support reply emailed for ticket #{ticket.id}.",
+        category="admin",
+        status="success",
+        request=request,
+        user=request.user,
+        metadata={"ticket_id": ticket.id, "reply_id": draft.id},
+    )
+    messages.success(request, f"Reply sent to {ticket.user.email}.")
+    return redirect("admin_support_detail", ticket_id=ticket.id)
+
+
+@admin_required
 def admin_resolve_ticket(request, ticket_id):
     """Admin action to resolve a support ticket."""
     ensure_seeded()
+    redirect_target = "admin_support"
     if request.method == "POST":
+        next_url = (request.POST.get("next") or "").strip()
+        if next_url and url_has_allowed_host_and_scheme(
+            next_url,
+            allowed_hosts={request.get_host()},
+            require_https=request.is_secure(),
+        ):
+            redirect_target = next_url
         ticket = get_object_or_404(SupportTicket, id=ticket_id)
         ticket.status = SupportTicket.STATUS_RESOLVED
         ticket.save(update_fields=["status"])
@@ -5557,7 +7630,7 @@ def admin_resolve_ticket(request, ticket_id):
             metadata={"ticket_id": ticket_id},
         )
         messages.success(request, f"Ticket #{ticket_id} resolved.")
-    return redirect("admin_support")
+    return redirect(redirect_target)
 
 
 def social_login_google(request):
@@ -5721,7 +7794,7 @@ def verify_email(request):
         email_subject = "Eventify Email Verification"
         email_body = "\n".join(
             [
-                f"Hi {request.user.first_name or request.user.username},",
+                f"Hi {request.user.get_full_name().strip() or request.user.username},",
                 "",
                 "Verify your Eventify email by opening this link:",
                 verification_link,
@@ -5947,6 +8020,7 @@ def verify_2fa(request):
     login(request, user)
     initialize_secure_session(request)
     auth_source = request.session.get("2fa_auth_source", "password")
+    redirect_to = _get_safe_next_url(request, request.session.get("post_login_redirect"))
     clear_pending_2fa_session(request)
     record_audit_log(
         action="login_success",
@@ -5958,6 +8032,8 @@ def verify_2fa(request):
         metadata={"auth_source": auth_source, "role": profile.role, "two_factor": True},
     )
     messages.success(request, "Login successful.")
+    if redirect_to:
+        return redirect(redirect_to)
     return redirect("dashboard")
 
 

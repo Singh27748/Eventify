@@ -98,9 +98,9 @@
                   height="34"
                 />
               {% else %}
-                <span class="avatar">{{ request.user.first_name|default:request.user.username|initials }}</span>
+                <span class="avatar">{{ request.user.get_full_name|default:request.user.username|initials }}</span>
               {% endif %}
-              <span class="user-name">{{ request.user.first_name|default:request.user.username }}</span>
+              <span class="user-name">{{ request.user.get_full_name|default:request.user.username }}</span>
               <span class="user-role">{{ current_profile.role }}</span>
             </summary>
             <div class="dropdown-card">

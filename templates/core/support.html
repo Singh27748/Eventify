@@ -4,12 +4,87 @@
 {% block content %}
   <section class="page-head">
     <h1>Support</h1>
-    <p>Submit support requests and track ticket status.</p>
+    <p>Get instant AI help, then hand off the conversation to our team whenever you need a human follow-up.</p>
   </section>
 
-  <section class="split-grid">
+  {{ active_support_conversation_payload|json_script:"support-ai-state" }}
+
+  <section
+    class="support-grid"
+    data-support-ai-root
+    data-start-url="{% url 'support_chat_start' %}"
+    data-message-url-template="{% url 'support_chat_message' 0 %}"
+    data-handoff-url-template="{% url 'support_chat_handoff' 0 %}"
+    data-support-url="{% url 'support' %}"
+  >
+    <div class="card support-ai-card">
+      <div class="card-head support-ai-head">
+        <div>
+          <span class="admin-table-kicker">AI Assistant</span>
+          <h2>Eventify Support Chat</h2>
+        </div>
+        <span class="badge">Local AI</span>
+      </div>
+      <p class="muted support-ai-banner">{{ support_ai_banner }}</p>
+
+      <div class="support-ai-toolbar">
+        <button
+          type="button"
+          class="small-btn"
+          data-support-ai-start
+        >
+          {% if active_support_conversation %}Resume Chat{% else %}Start AI Chat{% endif %}
+        </button>
+        <button
+          type="button"
+          class="small-btn secondary-btn"
+          data-support-ai-handoff
+          {% if not active_support_conversation %}disabled{% endif %}
+        >
+          Hand Off To Human Support
+        </button>
+      </div>
+
+      <div class="flash flash-error support-ai-alert" data-support-ai-alert hidden></div>
+
+      <div class="support-ai-transcript" data-support-ai-messages>
+        {% if active_support_conversation %}
+          {% for item in active_support_conversation.messages.all %}
+            <article class="support-ai-message support-ai-message-{{ item.sender_type }}">
+              <span class="support-ai-role">{{ item.sender_type|title }}</span>
+              <p>{{ item.content|linebreaksbr }}</p>
+              <small>{{ item.created_at|datetime_human }}</small>
+            </article>
+          {% endfor %}
+        {% else %}
+          <div class="support-ai-empty" data-support-ai-empty>
+            Start a chat to get quick help with bookings, payments, tickets, or your account.
+          </div>
+        {% endif %}
+      </div>
+
+      <form class="support-ai-compose" data-support-ai-form data-no-transport-encryption="true">
+        {% csrf_token %}
+        <label for="support-ai-input">Describe your issue</label>
+        <textarea
+          id="support-ai-input"
+          name="message"
+          rows="4"
+          maxlength="1200"
+          placeholder="Example: My payment succeeded but my booking still shows unpaid."
+          {% if not active_support_conversation %}disabled{% endif %}
+        ></textarea>
+        <div class="support-ai-actions">
+          <button type="submit" class="primary-btn" data-support-ai-send {% if not active_support_conversation %}disabled{% endif %}>
+            Send Message
+          </button>
+          <span class="muted">The AI can help instantly, and you can escalate this chat into a real support ticket at any time.</span>
+        </div>
+      </form>
+    </div>
+
     <div class="card">
-      <h2>Create Ticket</h2>
+      <h2>Create Ticket Manually</h2>
       <form action="{% url 'support' %}" method="post">
         {% csrf_token %}
         <label>Subject</label>
@@ -21,23 +96,34 @@
         <button type="submit" class="primary-btn">Submit Ticket</button>
       </form>
     </div>
+  </section>
 
-    <div class="card">
-      <h2>My Tickets</h2>
-      <div class="ticket-list">
-        {% for ticket in tickets %}
-          <article class="ticket-item">
-            <div>
-              <h3>{{ ticket.subject }}</h3>
-              <p>{{ ticket.message }}</p>
-              <span>{{ ticket.created_at|datetime_human }}</span>
-            </div>
-            <span class="badge {{ ticket.status|badge_class }}">{{ ticket.status }}</span>
-          </article>
-        {% empty %}
-          <p class="empty-text">No support tickets yet.</p>
-        {% endfor %}
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <span class="admin-table-kicker">Support Queue</span>
+        <h2>My Tickets</h2>
       </div>
+    </div>
+    <div class="ticket-list">
+      {% for ticket in tickets %}
+        <article class="ticket-item">
+          <div>
+            <h3>{{ ticket.subject }}</h3>
+            <p>{{ ticket.message }}</p>
+            {% if ticket.ai_summary %}
+              <p class="ticket-ai-summary"><strong>AI Summary:</strong> {{ ticket.ai_summary }}</p>
+            {% endif %}
+            <span>{{ ticket.created_at|datetime_human }}</span>
+          </div>
+          <div class="ticket-item-meta">
+            <span class="badge {{ ticket.status|badge_class }}">{{ ticket.status }}</span>
+            <span class="ticket-source">{{ ticket.get_source_display }}</span>
+          </div>
+        </article>
+      {% empty %}
+        <p class="empty-text">No support tickets yet.</p>
+      {% endfor %}
     </div>
   </section>
 {% endblock %}

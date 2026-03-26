@@ -160,6 +160,9 @@ const securePostFormSubmission = (form) => {
     try {
       const formData = new FormData(form);
       const payload = collectEncryptableFormData(formData);
+      if (submitter && submitter.name) {
+        appendPayloadValue(payload, submitter.name, submitter.value || "1");
+      }
 
       if (!Object.keys(payload).length) {
         form.dataset.transportEncrypted = "1";
@@ -269,6 +272,66 @@ const extractTicketTokenFromValue = (rawValue) => {
 
   return "";
 };
+
+const ADMIN_RESET_UNLOCK_KEY = "eventify:admin-reset-unlock";
+const ADMIN_RESET_CLICK_KEY = "eventify:admin-reset-clicks";
+const ADMIN_RESET_CLICK_TARGET = 10;
+
+const initializeAdminResetUnlock = () => {
+  const authRoot = document.querySelector(".auth-page");
+  if (!authRoot) {
+    return;
+  }
+
+  const brand = authRoot.querySelector(".auth-brand");
+  if (brand) {
+    brand.addEventListener("click", () => {
+      try {
+        const current = Number.parseInt(
+          window.localStorage.getItem(ADMIN_RESET_CLICK_KEY) || "0",
+          10
+        );
+        const next = Number.isNaN(current) ? 1 : current + 1;
+        if (next >= ADMIN_RESET_CLICK_TARGET) {
+          const unlocked =
+            window.localStorage.getItem(ADMIN_RESET_UNLOCK_KEY) === "1";
+          if (unlocked) {
+            window.localStorage.removeItem(ADMIN_RESET_UNLOCK_KEY);
+          } else {
+            window.localStorage.setItem(ADMIN_RESET_UNLOCK_KEY, "1");
+          }
+          window.localStorage.removeItem(ADMIN_RESET_CLICK_KEY);
+        } else {
+          window.localStorage.setItem(ADMIN_RESET_CLICK_KEY, String(next));
+        }
+      } catch (error) {
+        // Silent fail for locked storage environments.
+      }
+    });
+  }
+
+  const roleSelect = document.querySelector("[data-forgot-password-role]");
+  if (roleSelect) {
+    try {
+      const isUnlocked =
+        window.localStorage.getItem(ADMIN_RESET_UNLOCK_KEY) === "1";
+      const existing = Array.from(roleSelect.options).find(
+        (option) => option.value === "admin"
+      );
+      if (isUnlocked && !existing) {
+        const option = document.createElement("option");
+        option.value = "admin";
+        option.textContent = "Admin";
+        roleSelect.appendChild(option);
+      } else if (!isUnlocked && existing) {
+        existing.remove();
+      }
+    } catch (error) {
+      // Ignore storage errors.
+    }
+  }
+};
+
 
 const normalizeTicketReference = (rawValue) => {
   const candidate = String(rawValue || "").trim().toUpperCase();
@@ -1334,11 +1397,244 @@ const initializeEventParticipantsToggle = () => {
   });
 };
 
+const initializeSupportAI = () => {
+  const root = document.querySelector("[data-support-ai-root]");
+  if (!root) {
+    return;
+  }
+
+  const stateNode = document.getElementById("support-ai-state");
+  let conversation = null;
+  if (stateNode && stateNode.textContent) {
+    try {
+      conversation = JSON.parse(stateNode.textContent);
+    } catch (error) {
+      console.error("Failed to parse support AI state.", error);
+    }
+  }
+
+  const startUrl = root.dataset.startUrl || "";
+  const messageUrlTemplate = root.dataset.messageUrlTemplate || "";
+  const handoffUrlTemplate = root.dataset.handoffUrlTemplate || "";
+  const transcript = root.querySelector("[data-support-ai-messages]");
+  const alertBox = root.querySelector("[data-support-ai-alert]");
+  const startButton = root.querySelector("[data-support-ai-start]");
+  const handoffButton = root.querySelector("[data-support-ai-handoff]");
+  const composeForm = root.querySelector("[data-support-ai-form]");
+  const textarea = composeForm
+    ? composeForm.querySelector("textarea[name='message']")
+    : null;
+  const sendButton = composeForm
+    ? composeForm.querySelector("[data-support-ai-send]")
+    : null;
+
+  const getCsrfToken = () => {
+    const csrfField = composeForm
+      ? composeForm.querySelector("input[name='csrfmiddlewaretoken']")
+      : null;
+    return (csrfField && csrfField.value) || "";
+  };
+
+  const buildConversationUrl = (template, conversationId) =>
+    template.replace("/0/", `/${conversationId}/`);
+
+  const setBusy = (isBusy) => {
+    if (startButton) {
+      startButton.disabled = Boolean(isBusy);
+    }
+    if (sendButton) {
+      sendButton.disabled =
+        Boolean(isBusy) || !conversation || conversation.status !== "active";
+    }
+    if (handoffButton) {
+      handoffButton.disabled =
+        Boolean(isBusy) || !conversation || conversation.status !== "active";
+    }
+    if (textarea) {
+      textarea.disabled = Boolean(isBusy) || !conversation || conversation.status !== "active";
+    }
+  };
+
+  const setAlert = (message, type = "error") => {
+    if (!alertBox) {
+      return;
+    }
+
+    if (!message) {
+      alertBox.hidden = true;
+      alertBox.textContent = "";
+      alertBox.className = "flash flash-error support-ai-alert";
+      return;
+    }
+
+    alertBox.hidden = false;
+    alertBox.textContent = message;
+    alertBox.className =
+      type === "success"
+        ? "flash flash-success support-ai-alert"
+        : "flash flash-error support-ai-alert";
+  };
+
+  const renderConversation = () => {
+    if (!transcript) {
+      return;
+    }
+
+    transcript.innerHTML = "";
+    if (!conversation || !Array.isArray(conversation.messages) || !conversation.messages.length) {
+      const empty = document.createElement("div");
+      empty.className = "support-ai-empty";
+      empty.textContent =
+        "Start a chat to get quick help with bookings, payments, tickets, or your account.";
+      transcript.appendChild(empty);
+    } else {
+      conversation.messages.forEach((item) => {
+        const article = document.createElement("article");
+        article.className = `support-ai-message support-ai-message-${item.sender_type}`;
+
+        const role = document.createElement("span");
+        role.className = "support-ai-role";
+        role.textContent = item.sender_type;
+
+        const content = document.createElement("p");
+        content.textContent = item.content || "";
+
+        const meta = document.createElement("small");
+        meta.textContent = item.created_at || "";
+
+        article.appendChild(role);
+        article.appendChild(content);
+        article.appendChild(meta);
+        transcript.appendChild(article);
+      });
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+
+    if (startButton) {
+      startButton.textContent =
+        conversation && conversation.status === "active" ? "Resume Chat" : "Start AI Chat";
+    }
+    setBusy(false);
+  };
+
+  const postForm = async (url, formData = new FormData()) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "X-CSRFToken": getCsrfToken(),
+        "X-Requested-With": "XMLHttpRequest",
+      },
+      body: formData,
+      credentials: "same-origin",
+    });
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch (error) {
+      payload = { ok: false, error: "Unexpected response from support assistant." };
+    }
+    if (!response.ok || payload.ok === false) {
+      throw new Error(
+        (payload && payload.error) ||
+          "AI assistant is unavailable right now. You can still submit a support ticket."
+      );
+    }
+    return payload;
+  };
+
+  const ensureConversation = async () => {
+    if (conversation && conversation.status === "active") {
+      return conversation;
+    }
+
+    const payload = await postForm(startUrl);
+    conversation = payload.conversation || null;
+    renderConversation();
+    return conversation;
+  };
+
+  if (startButton) {
+    startButton.addEventListener("click", async () => {
+      setAlert("");
+      setBusy(true);
+      try {
+        await ensureConversation();
+      } catch (error) {
+        setAlert(error.message || "Unable to start AI chat right now.");
+        setBusy(false);
+      }
+    });
+  }
+
+  if (composeForm) {
+    composeForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      setAlert("");
+
+      const message = textarea ? textarea.value.trim() : "";
+      if (!message) {
+        setAlert("Please enter a message.");
+        return;
+      }
+
+      setBusy(true);
+      try {
+        const activeConversation = await ensureConversation();
+        const formData = new FormData();
+        formData.append("message", message);
+        const payload = await postForm(
+          buildConversationUrl(messageUrlTemplate, activeConversation.id),
+          formData
+        );
+        conversation = payload.conversation || activeConversation;
+        if (textarea) {
+          textarea.value = "";
+        }
+        renderConversation();
+      } catch (error) {
+        setAlert(error.message || "Unable to send your message right now.");
+        setBusy(false);
+      }
+    });
+  }
+
+  if (handoffButton) {
+    handoffButton.addEventListener("click", async () => {
+      setAlert("");
+      if (!conversation || conversation.status !== "active") {
+        setAlert("Start a chat before handing it off.");
+        return;
+      }
+
+      setBusy(true);
+      try {
+        const payload = await postForm(
+          buildConversationUrl(handoffUrlTemplate, conversation.id)
+        );
+        setAlert(
+          `Conversation handed off successfully as ticket #${payload.ticket_id}.`,
+          "success"
+        );
+        window.setTimeout(() => {
+          window.location.assign(payload.redirect_url || root.dataset.supportUrl || window.location.href);
+        }, 700);
+      } catch (error) {
+        setAlert(error.message || "Unable to hand off this conversation right now.");
+        setBusy(false);
+      }
+    });
+  }
+
+  renderConversation();
+};
+
 document.addEventListener("DOMContentLoaded", () => {
   enableTransportEncryptionForPostForms();
   initializeMobileQrQuickScanner();
   initializeDashboardTicketScanner();
   initializeEventParticipantsToggle();
+  initializeSupportAI();
+  initializeAdminResetUnlock();
 
   const sidebar = document.getElementById("sidebar");
   const toggle = document.querySelector("[data-toggle-sidebar]");

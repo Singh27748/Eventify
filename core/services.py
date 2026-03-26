@@ -4,6 +4,8 @@ Isme notifications create karna, menu items, labels, OTP generate karna, etc. sh
 """
 
 import random
+
+from django.conf import settings
 from datetime import timedelta
 
 from django.contrib.auth.models import User
@@ -118,6 +120,7 @@ def menu_by_role(role, language="English"):
         return [
             {"key": "dashboard", "label": labels["dashboard"], "href": "/dashboard/"},
             {"key": "admin-events", "label": "All Events", "href": "/platform-admin/events/"},
+            {"key": "admin-ads", "label": "Advertisements", "href": "/platform-admin/advertisements/"},
             {"key": "admin-users", "label": "All Users", "href": "/platform-admin/users/"},
             {"key": "admin-tickets", "label": "All Bookings", "href": "/platform-admin/bookings/"},
             {"key": "admin-payments", "label": "All Payments", "href": "/platform-admin/payments/"},
@@ -129,6 +132,7 @@ def menu_by_role(role, language="English"):
             {"key": "dashboard", "label": labels["dashboard"], "href": "/dashboard/"},
             {"key": "my-events", "label": labels["my_events"], "href": "/my-events/"},
             {"key": "organizer-bookings", "label": labels["bookings"], "href": "/organizer-bookings/"},
+            {"key": "ticket-recheck", "label": "Ticket Rechecking", "href": "/ticket-recheck/"},
             {"key": "payment-history", "label": labels["payment_history"], "href": "/payment-history/"},
             {"key": "invoices", "label": labels["invoice"], "href": "/invoices/"},
             {"key": "profile", "label": labels["my_profile"], "href": "/profile/"},
@@ -203,26 +207,32 @@ def seed_demo_data():
             },
         )
 
-    admin_user = User.objects.filter(username="admin@example.com").first()
+    admin_email = (getattr(settings, "DEFAULT_ADMIN_EMAIL", "") or "asing27748@gmail.com").strip().lower()
+    admin_user = User.objects.filter(username=admin_email).first()
     if not admin_user:
         admin_user = User.objects.create_user(
-            username="admin@example.com",
+            username=admin_email,
             password="admin123",
             first_name="Platform Admin",
             last_name="",
-            email="admin@example.com",
+            email=admin_email,
         )
+        admin_user.is_staff = True
+        admin_user.save(update_fields=["is_staff"])
         Profile.objects.update_or_create(
             user=admin_user,
             defaults={
                 "role": Profile.ROLE_ADMIN,
-                "contact": "admin@example.com",
+                "contact": admin_email,
                 "phone": "+91 9000000000",
                 "address": "Platform Operations",
                 "email_verified": True,
             },
         )
     else:
+        if not admin_user.is_staff:
+            admin_user.is_staff = True
+            admin_user.save(update_fields=["is_staff"])
         Profile.objects.update_or_create(
             user=admin_user,
             defaults={
@@ -430,32 +440,37 @@ def seed_demo_data():
 def get_trending_events(limit=6):
     """
     Get trending events based on booking count and recent activity.
-    Events with most bookings in the last 30 days are considered trending.
+    Events with most bookings in the last 30 days are considered trending,
+    but only events scheduled in the next 30 days are returned.
     """
     from django.db.models import Count
-    from datetime import timedelta
-    
+
+    today = timezone.localdate()
+    thirty_days_from_now = today + timedelta(days=30)
     thirty_days_ago = timezone.now() - timedelta(days=30)
-    
-    # Get events with most bookings in last 30 days
+
+    # Get events with most bookings in last 30 days, limited to the next 30 days.
     trending = (
         Event.objects.filter(
             is_private=False,
+            date__gte=today,
+            date__lte=thirty_days_from_now,
             bookings__booking_date__gte=thirty_days_ago,
-            bookings__payment_status=Booking.PAYMENT_PAID
+            bookings__payment_status=Booking.PAYMENT_PAID,
         )
-        .annotate(booking_count=Count('bookings'))
+        .annotate(booking_count=Count("bookings"))
         .filter(booking_count__gt=0)
-        .order_by('-booking_count', '-date')[:limit]
+        .order_by("-booking_count", "date")[:limit]
     )
-    
-    # If not enough trending events, fill with upcoming events
+
+    # If not enough trending events, fill with other upcoming events from the same 30-day window.
     if trending.count() < limit:
         existing_ids = [e.id for e in trending]
         upcoming = Event.objects.filter(
             is_private=False,
-            date__gte=timezone.localdate()
-        ).exclude(id__in=existing_ids).order_by('date')[:limit - trending.count()]
+            date__gte=today,
+            date__lte=thirty_days_from_now,
+        ).exclude(id__in=existing_ids).order_by("date")[: limit - trending.count()]
         trending = list(trending) + list(upcoming)
-    
+
     return trending

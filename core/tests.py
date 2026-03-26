@@ -18,12 +18,14 @@ from django.urls import reverse
 from django.utils import timezone
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from .ai_support import SupportAIError
 from .middleware import PanelTransportEncryptionMiddleware
 from .models import (
     Booking,
     Event,
     EventActivitySlot,
     EventHelperSlot,
+    HomepageHeroPromo,
     LoginThrottle,
     Notification,
     OTPRequest,
@@ -32,6 +34,10 @@ from .models import (
     Profile,
     PromoCode,
     SecurityAuditLog,
+    SupportConversation,
+    SupportMessage,
+    SupportReply,
+    SupportTicket,
     TicketType,
 )
 from .api_views import _build_auth_username, _build_unique_auth_username
@@ -349,6 +355,109 @@ class HomePastEventsAlbumTests(TestCase):
         self.assertEqual(past_titles, ["Past Event"])
 
 
+class HomeHeroPromoTests(TestCase):
+    @staticmethod
+    def create_event(title, days_from_now, *, category="Tech", price=999):
+        return Event.objects.create(
+            title=title,
+            category=category,
+            location="Lucknow",
+            date=timezone.localdate() + timedelta(days=days_from_now),
+            time="6:00 PM - 9:00 PM",
+            price=price,
+            description=f"{title} description for homepage hero coverage.",
+            organizer_name="Hero Organizer",
+            organizer_phone="+91 9000001234",
+            organizer_email="hero@example.com",
+        )
+
+    @mock.patch("core.views.ensure_seeded")
+    def test_home_falls_back_to_default_promo_when_no_active_record_exists(self, mocked_seed):
+        response = self.client.get(reverse("home"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.context["hero_promo"]["headline"],
+            "Discover the hottest events before the best seats disappear.",
+        )
+        self.assertContains(response, "Discover the hottest events before the best seats disappear.")
+
+    @mock.patch("core.views.ensure_seeded")
+    def test_home_uses_newest_active_promo(self, mocked_seed):
+        HomepageHeroPromo.objects.create(
+            eyebrow="Old Promo",
+            headline="Earlier headline",
+            description="Earlier description",
+            chip_one="Old",
+        )
+        newest_promo = HomepageHeroPromo.objects.create(
+            eyebrow="New Promo",
+            headline="Newest headline wins",
+            description="Newest description",
+            chip_one="Live",
+            chip_two="Popular",
+            chip_three="Today",
+        )
+
+        response = self.client.get(reverse("home"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["hero_promo"]["headline"], newest_promo.headline)
+        self.assertContains(response, newest_promo.headline)
+
+    @mock.patch("core.views.get_trending_events")
+    @mock.patch("core.views.ensure_seeded")
+    def test_home_hero_grid_is_deduplicated_and_capped_to_three_items(self, mocked_seed, mocked_trending):
+        event_alpha = self.create_event("Alpha Event", 1)
+        event_charlie = self.create_event("Charlie Event", 2)
+        event_bravo = self.create_event("Bravo Event", 3)
+        self.create_event("Delta Event", 4)
+        mocked_trending.return_value = [event_bravo, event_alpha]
+
+        response = self.client.get(reverse("home"))
+
+        self.assertEqual(response.status_code, 200)
+        hero_titles = [event.title for event in response.context["hero_grid_events"]]
+        self.assertEqual(hero_titles, ["Bravo Event", "Alpha Event", "Charlie Event"])
+
+    @mock.patch("core.views.ensure_seeded")
+    def test_home_renders_even_when_active_promo_has_no_image(self, mocked_seed):
+        HomepageHeroPromo.objects.create(
+            eyebrow="No Image Promo",
+            headline="Promo without image",
+            description="This promo intentionally has no image.",
+            chip_one="Image Optional",
+        )
+        self.create_event("Image Optional Event", 2)
+
+        response = self.client.get(reverse("home"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Promo without image")
+
+    @mock.patch("core.views.get_trending_events")
+    @mock.patch("core.views.ensure_seeded")
+    def test_home_hero_renders_safely_with_fewer_than_three_live_events(self, mocked_seed, mocked_trending):
+        single_event = self.create_event("Single Hero Event", 5)
+        mocked_trending.return_value = []
+
+        response = self.client.get(reverse("home"))
+
+        self.assertEqual(response.status_code, 200)
+        hero_titles = [event.title for event in response.context["hero_grid_events"]]
+        self.assertEqual(hero_titles, [single_event.title])
+        self.assertContains(response, single_event.title)
+
+    @mock.patch("core.views.ensure_seeded")
+    def test_guest_billboard_links_to_public_events(self, mocked_seed):
+        self.create_event("Guest Click Event", 2)
+
+        response = self.client.get(reverse("home"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f'href="{reverse("public_events")}"')
+
+
 class SecurityHardeningTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
@@ -451,6 +560,66 @@ class SecurityHardeningTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertFalse(body["ok"])
         self.assertIn("2fa-enabled", body["error"].lower())
+
+
+class AuthRoleSelectionTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="role-page-user@example.com",
+            password="secret123",
+            first_name="Role Page User",
+            email="role-page-user@example.com",
+        )
+
+    @mock.patch("core.views.ensure_seeded")
+    def test_login_role_page_shows_admin_option(self, mocked_seed):
+        response = self.client.get(reverse("auth_role_page"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Attendee")
+        self.assertContains(response, "Event Organizer")
+        self.assertContains(response, "Admin")
+
+    @mock.patch("core.views.ensure_seeded")
+    def test_register_role_page_only_shows_registerable_roles(self, mocked_seed):
+        response = self.client.get(reverse("auth_role_page"), {"tab": "register"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Attendee")
+        self.assertContains(response, "Event Organizer")
+        self.assertNotContains(response, "Admin")
+
+    @mock.patch("core.views.ensure_seeded")
+    def test_auth_page_uses_hidden_selected_role(self, mocked_seed):
+        response = self.client.get(
+            reverse("auth_page"),
+            {"tab": "login", "role": Profile.ROLE_ORGANIZER, "next": reverse("public_events")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["selected_role"], Profile.ROLE_ORGANIZER)
+        self.assertContains(response, 'type="hidden" name="role" value="organizer"', html=False)
+        self.assertContains(
+            response,
+            f'type="hidden" name="next" value="{reverse("public_events")}"',
+            html=False,
+        )
+        self.assertContains(response, "Change role")
+
+    @mock.patch("core.views.ensure_seeded")
+    def test_successful_login_redirects_to_safe_next_url(self, mocked_seed):
+        response = self.client.post(
+            reverse("login_submit"),
+            data={
+                "role": Profile.ROLE_USER,
+                "contact": "role-page-user@example.com",
+                "password": "secret123",
+                "next": reverse("public_events"),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("public_events"))
 
 
 class UsernameGenerationTests(TestCase):
@@ -915,6 +1084,20 @@ class EventDetailParticipantsPanelTests(TestCase):
         self.assertContains(response, participants_file_url)
         self.assertContains(response, f"{participants_file_url}?open=1")
         self.assertContains(response, "Open")
+
+    def test_event_detail_shows_readable_visibility_badges(self):
+        self.client.force_login(self.organizer)
+
+        public_response = self.client.get(reverse("event_detail", args=[self.event.id]))
+        self.assertEqual(public_response.status_code, 200)
+        self.assertContains(public_response, "Public Event")
+
+        self.event.is_private = True
+        self.event.save(update_fields=["is_private"])
+
+        private_response = self.client.get(reverse("event_detail", args=[self.event.id]))
+        self.assertEqual(private_response.status_code, 200)
+        self.assertContains(private_response, "Private Event")
 
     def test_regular_user_does_not_see_participants_panel(self):
         self.client.force_login(self.attendee)
@@ -1424,6 +1607,45 @@ class PaymentFlowTests(TestCase):
         self.assertIsNotNone(refund_payment)
         self.assertEqual(refund_payment.amount, 250)
         self.assertTrue((refund_payment.transaction_ref or "").startswith("RFD-"))
+        self.assertEqual(refund_payment.payment_meta.get("refund_mode"), "partial")
+        self.assertEqual(refund_payment.payment_meta.get("original_transaction_ref"), "PAY-TEST-001")
+        self.assertIn("payer@upi", refund_payment.method_detail_summary)
+        self.assertIn("Original Txn PAY-TEST-001", refund_payment.method_detail_summary)
+
+    def test_refund_details_are_visible_after_ticket_cancellation(self):
+        booking = Booking.objects.create(
+            user=self.user,
+            event=self.event,
+            tickets=1,
+            attendee_name="Payment User",
+            total_amount=500,
+            payment_status=Booking.PAYMENT_PAID,
+            status=Booking.STATUS_CONFIRMED,
+            invoice_no="INV-PAY-003",
+        )
+        Payment.objects.create(
+            booking=booking,
+            amount=500,
+            method="UPI",
+            status=Payment.STATUS_PAID,
+            transaction_ref="PAY-TEST-REF-001",
+            upi_id="refunduser@upi",
+            gateway_provider="Eventify Local Gateway",
+            gateway_payment_id="UPI-TEST-REF-001",
+            payment_meta={"upi_id": "refunduser@upi"},
+        )
+
+        self.client.force_login(self.user)
+        self.client.post(reverse("cancel_booking", args=[booking.id]))
+
+        bookings_response = self.client.get(reverse("my_bookings"))
+        self.assertContains(bookings_response, "Refund Ref:")
+        self.assertContains(bookings_response, "RFD-")
+        self.assertContains(bookings_response, "Refunded INR 250")
+
+        history_response = self.client.get(reverse("payment_history"))
+        self.assertContains(history_response, "Original Txn PAY-TEST-REF-001")
+        self.assertContains(history_response, "Partial refund")
 
     def test_cancelled_booking_can_be_booked_again(self):
         Booking.objects.create(
@@ -2289,6 +2511,36 @@ class TrendingApiAndReminderTests(TestCase):
             transaction_ref="PAY-TREND-001",
         )
 
+        self.later_event = Event.objects.create(
+            title="Future Trending Event",
+            category="Workshop",
+            location="Noida",
+            date=timezone.localdate() + timedelta(days=45),
+            time="03:00 PM - 05:00 PM",
+            price=1200,
+            description="Should not appear in trending because it is beyond 30 days.",
+            organizer_name="Trend Organizer",
+            organizer_phone="+91 9888888888",
+            organizer_email="trend-organizer@example.com",
+            created_by=self.organizer,
+        )
+        self.later_booking = Booking.objects.create(
+            user=self.user,
+            event=self.later_event,
+            attendee_name="Trend User",
+            status=Booking.STATUS_CONFIRMED,
+            payment_status=Booking.PAYMENT_PAID,
+            tickets=1,
+            total_amount=1200,
+        )
+        Payment.objects.create(
+            booking=self.later_booking,
+            amount=1200,
+            method="UPI",
+            status=Payment.STATUS_PAID,
+            transaction_ref="PAY-TREND-002",
+        )
+
     def test_trending_events_api_returns_data(self):
         response = self.client.get(reverse("api_trending_events"))
         self.assertEqual(response.status_code, 200)
@@ -2296,6 +2548,15 @@ class TrendingApiAndReminderTests(TestCase):
         self.assertTrue(payload["ok"])
         event_ids = [item["id"] for item in payload["events"]]
         self.assertIn(self.event.id, event_ids)
+        self.assertNotIn(self.later_event.id, event_ids)
+
+    def test_home_trending_events_only_include_next_30_days(self):
+        response = self.client.get(reverse("home"))
+
+        self.assertEqual(response.status_code, 200)
+        event_ids = [item.id for item in response.context["trending_events"]]
+        self.assertIn(self.event.id, event_ids)
+        self.assertNotIn(self.later_event.id, event_ids)
 
     def test_send_event_reminders_command_creates_notifications(self):
         output = StringIO()
@@ -2303,3 +2564,236 @@ class TrendingApiAndReminderTests(TestCase):
         self.assertTrue(
             Notification.objects.filter(user=self.user, type="reminder").exists()
         )
+
+
+class SupportAIUserFlowTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="support-user@example.com",
+            password="secret123",
+            first_name="Support User",
+            email="support-user@example.com",
+        )
+        self.client.force_login(self.user)
+
+    @staticmethod
+    def _json(response):
+        return json.loads(response.content.decode("utf-8"))
+
+    @mock.patch("core.views.generate_user_support_reply")
+    def test_user_can_start_chat_and_receive_ai_reply(self, mocked_reply):
+        mocked_reply.return_value = {
+            "content": "Please check your payment history page and booking status once.",
+            "model_provider": "ollama",
+            "model_name": "llama3.1:8b",
+        }
+
+        start_response = self.client.post(reverse("support_chat_start"))
+        start_payload = self._json(start_response)
+
+        self.assertEqual(start_response.status_code, 200)
+        self.assertTrue(start_payload["ok"])
+        conversation = SupportConversation.objects.get(id=start_payload["conversation"]["id"])
+        self.assertEqual(conversation.status, SupportConversation.STATUS_ACTIVE)
+        self.assertEqual(conversation.messages.count(), 1)
+
+        reply_response = self.client.post(
+            reverse("support_chat_message", args=[conversation.id]),
+            data={"message": "My booking payment looks stuck."},
+        )
+        reply_payload = self._json(reply_response)
+
+        self.assertEqual(reply_response.status_code, 200)
+        self.assertTrue(reply_payload["ok"])
+        conversation.refresh_from_db()
+        self.assertEqual(conversation.messages.count(), 3)
+        assistant_message = conversation.messages.filter(
+            sender_type=SupportMessage.SENDER_ASSISTANT
+        ).latest("id")
+        self.assertIn("payment history", assistant_message.content)
+        self.assertEqual(conversation.model_provider, "ollama")
+        self.assertEqual(conversation.model_name, "llama3.1:8b")
+
+    @mock.patch("core.views.summarize_support_conversation")
+    def test_ai_handoff_creates_support_ticket_with_summary(self, mocked_summary):
+        mocked_summary.return_value = {
+            "content": "User needs a human follow-up for a payment that appears successful but booking is unpaid."
+        }
+        conversation = SupportConversation.objects.create(
+            user=self.user,
+            status=SupportConversation.STATUS_ACTIVE,
+            title="Payment status mismatch",
+            model_provider="ollama",
+            model_name="llama3.1:8b",
+        )
+        SupportMessage.objects.create(
+            conversation=conversation,
+            sender_type=SupportMessage.SENDER_USER,
+            content="Payment succeeded but booking still shows unpaid.",
+        )
+
+        response = self.client.post(reverse("support_chat_handoff", args=[conversation.id]))
+        payload = self._json(response)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["ok"])
+        conversation.refresh_from_db()
+        self.assertEqual(conversation.status, SupportConversation.STATUS_HANDED_OFF)
+        ticket = SupportTicket.objects.get(id=payload["ticket_id"])
+        self.assertEqual(ticket.source, SupportTicket.SOURCE_AI_HANDOFF)
+        self.assertEqual(ticket.conversation, conversation)
+        self.assertIn("human follow-up", ticket.ai_summary)
+        self.assertEqual(ticket.message, ticket.ai_summary)
+
+    @mock.patch("core.views.generate_user_support_reply", side_effect=SupportAIError("AI assistant is unavailable right now."))
+    def test_ai_failure_falls_back_without_breaking_manual_ticket_submission(self, mocked_reply):
+        conversation = SupportConversation.objects.create(
+            user=self.user,
+            status=SupportConversation.STATUS_ACTIVE,
+            title="Fallback test",
+            model_provider="ollama",
+            model_name="llama3.1:8b",
+        )
+        SupportMessage.objects.create(
+            conversation=conversation,
+            sender_type=SupportMessage.SENDER_SYSTEM,
+            content="Hello from support AI.",
+        )
+
+        ai_response = self.client.post(
+            reverse("support_chat_message", args=[conversation.id]),
+            data={"message": "Need help with failed payment."},
+        )
+        ai_payload = self._json(ai_response)
+
+        self.assertEqual(ai_response.status_code, 503)
+        self.assertFalse(ai_payload["ok"])
+        self.assertIn("unavailable", ai_payload["error"].lower())
+
+        manual_response = self.client.post(
+            reverse("support"),
+            data={"subject": "Manual support fallback", "message": "Please help manually."},
+            follow=True,
+        )
+
+        self.assertEqual(manual_response.status_code, 200)
+        self.assertTrue(
+            SupportTicket.objects.filter(
+                user=self.user,
+                subject="Manual support fallback",
+                source=SupportTicket.SOURCE_MANUAL,
+            ).exists()
+        )
+
+
+class AdminAISupportReplyTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="support-admin@example.com",
+            password="secret123",
+            first_name="Support Admin",
+            email="support-admin@example.com",
+        )
+        admin_profile = self.admin.profile
+        admin_profile.role = Profile.ROLE_ADMIN
+        admin_profile.contact = self.admin.username
+        admin_profile.save(update_fields=["role", "contact"])
+
+        self.user = User.objects.create_user(
+            username="customer-support@example.com",
+            password="secret123",
+            first_name="Customer Support",
+            email="customer-support@example.com",
+        )
+        self.conversation = SupportConversation.objects.create(
+            user=self.user,
+            status=SupportConversation.STATUS_HANDED_OFF,
+            title="Need refund clarification",
+            model_provider="ollama",
+            model_name="llama3.1:8b",
+            last_summary="Customer wants refund clarification for a cancelled ticket.",
+        )
+        SupportMessage.objects.create(
+            conversation=self.conversation,
+            sender_type=SupportMessage.SENDER_USER,
+            content="I cancelled my ticket and want to know when my refund will arrive.",
+        )
+        SupportMessage.objects.create(
+            conversation=self.conversation,
+            sender_type=SupportMessage.SENDER_ASSISTANT,
+            content="A human agent can confirm the refund timeline for you.",
+        )
+        self.ticket = SupportTicket.objects.create(
+            user=self.user,
+            conversation=self.conversation,
+            subject="Refund clarification",
+            message="Please confirm the refund timeline.",
+            source=SupportTicket.SOURCE_AI_HANDOFF,
+            ai_summary="Customer needs a refund timeline update.",
+        )
+
+    @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+    @mock.patch("core.views.generate_admin_email_draft")
+    def test_admin_can_generate_ai_draft_and_send_email_reply(self, mocked_draft):
+        mocked_draft.return_value = {
+            "subject": "Update on your Eventify support request",
+            "body": "We are reviewing your refund timeline and will share the next update shortly.",
+            "model_provider": "ollama",
+            "model_name": "llama3.1:8b",
+        }
+        self.client.force_login(self.admin)
+
+        draft_response = self.client.post(
+            reverse("admin_generate_support_reply", args=[self.ticket.id])
+        )
+
+        self.assertEqual(draft_response.status_code, 302)
+        draft = SupportReply.objects.get(ticket=self.ticket, admin=self.admin)
+        self.assertEqual(draft.status, SupportReply.STATUS_DRAFT)
+        self.assertTrue(draft.ai_generated)
+
+        send_response = self.client.post(
+            reverse("admin_send_support_reply", args=[self.ticket.id]),
+            data={
+                "reply_id": draft.id,
+                "subject": draft.subject,
+                "body": draft.body,
+            },
+        )
+
+        self.assertEqual(send_response.status_code, 302)
+        draft.refresh_from_db()
+        self.ticket.refresh_from_db()
+        self.assertEqual(draft.status, SupportReply.STATUS_SENT)
+        self.assertIsNotNone(draft.sent_at)
+        self.assertEqual(self.ticket.status, SupportTicket.STATUS_IN_PROGRESS)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["customer-support@example.com"])
+        self.assertIn("refund timeline", mail.outbox[0].body)
+
+    @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+    def test_missing_user_email_blocks_send_and_keeps_draft(self):
+        self.user.email = ""
+        self.user.save(update_fields=["email"])
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            reverse("admin_send_support_reply", args=[self.ticket.id]),
+            data={
+                "subject": "Update on your support request",
+                "body": "We need one more business day to verify the refund status.",
+            },
+            follow=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        draft = SupportReply.objects.get(ticket=self.ticket, admin=self.admin)
+        self.assertEqual(draft.status, SupportReply.STATUS_DRAFT)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_non_admin_cannot_open_admin_support_detail(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("admin_support_detail", args=[self.ticket.id]))
+
+        self.assertEqual(response.status_code, 302)

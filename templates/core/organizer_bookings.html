@@ -8,6 +8,55 @@
   </section>
 
   <section class="card">
+    <form method="get" class="filter-grid">
+      <div>
+        <label for="filter-user">User</label>
+        <select id="filter-user" name="user">
+          <option value="">All Users</option>
+          {% for user in filter_users %}
+            <option value="{{ user.id }}" {% if filters.user == user.id %}selected{% endif %}>
+              {{ user.get_full_name|default:user.username }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="filter-event">Event</label>
+        <select id="filter-event" name="event">
+          <option value="">All Events</option>
+          {% for event in filter_events %}
+            <option value="{{ event.id }}" {% if filters.event == event.id %}selected{% endif %}>
+              {{ event.title }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="filter-status">Booking Status</label>
+        <select id="filter-status" name="status">
+          <option value="">All Statuses</option>
+          {% for key, label in status_choices %}
+            <option value="{{ key }}" {% if filters.status == key %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="full-width inline-stack">
+        <button type="submit" class="small-btn">Apply Filters</button>
+        <a href="{% url 'organizer_bookings' %}" class="small-btn">Reset</a>
+        <a
+          href="{% url 'organizer_bookings_export_csv' %}{% if filter_query %}?{{ filter_query }}{% endif %}"
+          class="small-btn"
+        >
+          Download CSV
+        </a>
+        <a
+          href="{% url 'organizer_bookings_export_pdf' %}{% if filter_query %}?{{ filter_query }}{% endif %}"
+          class="small-btn"
+        >
+          Download PDF
+        </a>
+      </div>
+    </form>
     <div class="table-wrap">
       <table class="mobile-data-table">
         <thead>
@@ -27,9 +76,34 @@
           {% for item in bookings %}
             <tr>
               <td data-label="Ticket ID">{{ item.ticket_reference }}</td>
-              <td data-label="Customer">{{ item.user.first_name|default:item.user.username }}</td>
-              <td data-label="Event">{{ item.event.title }}</td>
-              <td data-label="Date">{{ item.event.date|date_human }}</td>
+              <td data-label="Customer">
+                <div class="table-user">
+                  {% with user_profile=item.user.profile %}
+                    {% if user_profile and user_profile.profile_image %}
+                      <img
+                        src="{{ user_profile.profile_image.url }}"
+                        alt="{{ item.user.get_full_name|default:item.user.username }}"
+                        class="avatar avatar-img"
+                        width="34"
+                        height="34"
+                      />
+                    {% else %}
+                      <span class="avatar">{{ item.user.get_full_name|default:item.user.username|initials }}</span>
+                    {% endif %}
+                  {% endwith %}
+                  <div class="table-user-meta">
+                    <strong>{{ item.user.get_full_name|default:item.user.username }}</strong>
+                    <small class="muted">{{ item.user.email|default:'-' }}</small>
+                  </div>
+                </div>
+              </td>
+              <td data-label="Event">
+                <div>
+                  <strong>{{ item.event.title }}</strong>
+                  <div class="muted">{{ item.event.location }}</div>
+                </div>
+              </td>
+              <td data-label="Date">{{ item.event.date|date_human }} | {{ item.event.time }}</td>
               <td data-label="Ticket Type">{{ item.ticket_type.name|default:'Standard' }}</td>
               <td data-label="Tickets">{{ item.tickets }}</td>
               <td data-label="Applied Role">{{ item.applied_role_label }}</td>

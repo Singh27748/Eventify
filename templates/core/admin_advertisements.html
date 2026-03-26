@@ -1,0 +1,372 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Advertisement Requests | Eventify{% endblock %}
+{% block content %}
+  <div class="admin-page">
+    <section class="admin-page-head">
+      <div class="page-head">
+        <h1>Advertisement Requests</h1>
+        <p>Review and approve event advertisement requests.</p>
+      </div>
+      <div class="admin-page-meta">
+        <span class="admin-page-badge">{{ pending_ads|length }} pending</span>
+      </div>
+    </section>
+
+    <section class="card admin-table-card">
+      <div class="card-head">
+        <div>
+          <span class="admin-table-kicker">Settings</span>
+          <h2>Advertisement Rotation</h2>
+          <p class="admin-inline-note">Homepage me 3 slots rotate hote hain. Time set karke next ad auto show hoga.</p>
+        </div>
+      </div>
+      <form action="{% url 'admin_advertisement_settings_update' %}" method="post">
+        {% csrf_token %}
+        <div class="admin-bulk-actions">
+          <label>
+            Rotation (seconds)
+            <input
+              type="number"
+              name="rotation_seconds"
+              min="3"
+              max="120"
+              value="{{ ad_settings.rotation_seconds }}"
+              required
+            />
+          </label>
+          <label>
+            Slots (cards)
+            <input
+              type="number"
+              name="slot_count"
+              min="1"
+              max="4"
+              value="{{ ad_settings.slot_count }}"
+              required
+            />
+          </label>
+          <button type="submit" class="small-btn">Save</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card admin-table-card">
+      <div class="card-head">
+        <div>
+          <span class="admin-table-kicker">Slots</span>
+          <h2>Slot Assignment</h2>
+          <p class="admin-inline-note">Choose which ads appear in each slot and their order.</p>
+        </div>
+      </div>
+      <form action="{% url 'admin_advertisement_slots_update' %}" method="post">
+        {% csrf_token %}
+        <div class="slot-config-grid">
+          {% for slot in ad_slots %}
+            <div class="slot-config-card">
+              <h3>
+                {% if slot.slot_index == 0 %}
+                  Hero Slot (0)
+                {% else %}
+                  Slot {{ slot.slot_index }}
+                {% endif %}
+              </h3>
+              <label>
+                Rotation (seconds)
+                <input
+                  type="number"
+                  name="slot_rotation_{{ slot.slot_index }}"
+                  min="3"
+                  max="120"
+                  value="{{ slot.rotation_seconds }}"
+                  required
+                />
+              </label>
+              <label>
+                Size
+                <select name="slot_size_{{ slot.slot_index }}">
+                  <option value="compact" {% if slot.size == "compact" %}selected{% endif %}>Compact</option>
+                  <option value="standard" {% if slot.size == "standard" %}selected{% endif %}>Standard</option>
+                  <option value="large" {% if slot.size == "large" %}selected{% endif %}>Large</option>
+                  <option value="wide" {% if slot.size == "wide" %}selected{% endif %}>Wide</option>
+                </select>
+              </label>
+              <label>
+                Design
+                <select name="slot_design_{{ slot.slot_index }}">
+                  <option value="classic" {% if slot.design == "classic" %}selected{% endif %}>Classic</option>
+                  <option value="glass" {% if slot.design == "glass" %}selected{% endif %}>Glass</option>
+                  <option value="bold" {% if slot.design == "bold" %}selected{% endif %}>Bold</option>
+                  <option value="soft" {% if slot.design == "soft" %}selected{% endif %}>Soft</option>
+                </select>
+              </label>
+            </div>
+          {% endfor %}
+        </div>
+        <div class="table-wrap">
+          <table class="mobile-data-table admin-data-table admin-ads-assign-table">
+            <thead>
+              <tr>
+                <th>Event</th>
+                <th>When</th>
+                <th>Place</th>
+                <th>Slot</th>
+                <th>Order</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in approved_ads %}
+                <tr>
+                  <td data-label="Event">{{ item.event.title }}</td>
+                  <td data-label="When">
+                    {{ item.event.date|date_human }}{% if item.event.time %} | {{ item.event.time }}{% endif %}
+                  </td>
+                  <td data-label="Place">{{ item.event.location }}</td>
+                  <td data-label="Slot">
+                    <input type="hidden" name="ad_ids" value="{{ item.id }}" />
+                    <select name="assign_slot_{{ item.id }}">
+                      <option value="">Not assigned</option>
+                      {% for slot in ad_slots %}
+                        <option value="{{ slot.slot_index }}" {% if item.slot_index == slot.slot_index %}selected{% endif %}>
+                          {% if slot.slot_index == 0 %}Hero Slot (0){% else %}Slot {{ slot.slot_index }}{% endif %}
+                        </option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                  <td data-label="Order">
+                    <input
+                      type="number"
+                      name="assign_order_{{ item.id }}"
+                      min="1"
+                      value="{{ item.slot_position }}"
+                      placeholder="Order"
+                    />
+                  </td>
+                </tr>
+              {% empty %}
+                <tr class="empty-row"><td colspan="5" class="empty-cell">No approved ads available.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="admin-bulk-actions">
+          <button type="submit" class="small-btn">Save Slot Assignment</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card admin-table-card">
+      <div class="card-head">
+        <div>
+          <span class="admin-table-kicker">Management</span>
+          <h2>Advertisement Management</h2>
+          <p class="admin-inline-note">Select multiple requests and apply bulk actions.</p>
+        </div>
+      </div>
+      <form action="{% url 'admin_advertisements_bulk' %}" method="post">
+        {% csrf_token %}
+        <div class="admin-bulk-actions">
+          <label class="admin-select-all">
+            <input type="checkbox" class="js-ad-select-all" />
+            Select all
+          </label>
+          <select name="bulk_action" required>
+            <option value="">Bulk action</option>
+            <option value="approve">Approve</option>
+            <option value="reject">Reject</option>
+          </select>
+          <input type="text" name="bulk_note" maxlength="255" placeholder="Admin note (optional)" />
+          <button type="submit" class="small-btn">Apply</button>
+        </div>
+        <div class="table-wrap">
+          <table class="mobile-data-table admin-data-table admin-ads-table">
+            <thead>
+              <tr>
+                <th class="table-checkbox">Select</th>
+                <th>Event</th>
+                <th>Organizer</th>
+                <th>When</th>
+                <th>Place</th>
+                <th>Status</th>
+                <th>Requested</th>
+                <th>Reviewed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in all_ads %}
+                <tr>
+                  <td data-label="Select">
+                    <input type="checkbox" name="ad_ids" value="{{ item.id }}" class="js-ad-select" />
+                  </td>
+                  <td data-label="Event">{{ item.event.title }}</td>
+                  <td data-label="Organizer">
+                    {{ item.requested_by.get_full_name|default:item.requested_by.username|default:"-" }}
+                  </td>
+                  <td data-label="When">
+                    {{ item.event.date|date_human }}{% if item.event.time %} | {{ item.event.time }}{% endif %}
+                  </td>
+                  <td data-label="Place">{{ item.event.location }}</td>
+                  <td data-label="Status">
+                    {% if item.status == "approved" %}
+                      <span class="badge badge-green">Approved</span>
+                    {% elif item.status == "rejected" %}
+                      <span class="badge badge-red">Rejected</span>
+                    {% else %}
+                      <span class="badge badge-orange">Pending</span>
+                    {% endif %}
+                  </td>
+                  <td data-label="Requested">{{ item.requested_at|date:"d M Y, h:i A" }}</td>
+                  <td data-label="Reviewed">
+                    {% if item.reviewed_at %}
+                      {{ item.reviewed_at|date:"d M Y, h:i A" }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+                </tr>
+              {% empty %}
+                <tr class="empty-row"><td colspan="8" class="empty-cell">No advertisement requests yet.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </form>
+    </section>
+
+    <section class="card admin-table-card">
+      <div class="card-head">
+        <div>
+          <span class="admin-table-kicker">Pending</span>
+          <h2>Advertisement Pending</h2>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="mobile-data-table admin-data-table">
+          <thead>
+            <tr>
+              <th>Event</th>
+              <th>Organizer</th>
+              <th>When</th>
+              <th>Place</th>
+              <th>Requested</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in pending_ads %}
+              <tr>
+                <td data-label="Event">{{ item.event.title }}</td>
+                <td data-label="Organizer">{{ item.requested_by.get_full_name|default:item.requested_by.username|default:'-' }}</td>
+                <td data-label="When">
+                  {{ item.event.date|date_human }}{% if item.event.time %} | {{ item.event.time }}{% endif %}
+                </td>
+                <td data-label="Place">{{ item.event.location }}</td>
+                <td data-label="Requested">{{ item.requested_at|date:"d M Y, h:i A" }}</td>
+                <td data-label="Action">
+                  <form action="{% url 'admin_advertisement_update' item.id %}" method="post" class="inline-stack">
+                    {% csrf_token %}
+                    <input type="text" name="note" maxlength="255" placeholder="Admin note (optional)" />
+                    <button type="submit" name="action" value="approve" class="small-btn">Approve</button>
+                    <button type="submit" name="action" value="reject" class="small-btn">Reject</button>
+                  </form>
+                </td>
+              </tr>
+            {% empty %}
+              <tr class="empty-row"><td colspan="6" class="empty-cell">No pending requests.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card admin-table-card">
+      <div class="card-head">
+        <div>
+          <span class="admin-table-kicker">Approved</span>
+          <h2>Approved Advertisements</h2>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="mobile-data-table admin-data-table">
+          <thead>
+            <tr>
+              <th>Event</th>
+              <th>Organizer</th>
+              <th>When</th>
+              <th>Place</th>
+              <th>Approved</th>
+              <th>Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in approved_ads %}
+              <tr>
+                <td data-label="Event">{{ item.event.title }}</td>
+                <td data-label="Organizer">{{ item.requested_by.get_full_name|default:item.requested_by.username|default:'-' }}</td>
+                <td data-label="When">
+                  {{ item.event.date|date_human }}{% if item.event.time %} | {{ item.event.time }}{% endif %}
+                </td>
+                <td data-label="Place">{{ item.event.location }}</td>
+                <td data-label="Approved">{{ item.reviewed_at|date:"d M Y, h:i A" }}</td>
+                <td data-label="Note">{{ item.admin_note|default:"-" }}</td>
+              </tr>
+            {% empty %}
+              <tr class="empty-row"><td colspan="6" class="empty-cell">No approved requests yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card admin-table-card">
+      <div class="card-head">
+        <div>
+          <span class="admin-table-kicker">Rejected</span>
+          <h2>Rejected Requests</h2>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="mobile-data-table admin-data-table">
+          <thead>
+            <tr>
+              <th>Event</th>
+              <th>Organizer</th>
+              <th>When</th>
+              <th>Place</th>
+              <th>Rejected</th>
+              <th>Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in rejected_ads %}
+              <tr>
+                <td data-label="Event">{{ item.event.title }}</td>
+                <td data-label="Organizer">{{ item.requested_by.get_full_name|default:item.requested_by.username|default:'-' }}</td>
+                <td data-label="When">
+                  {{ item.event.date|date_human }}{% if item.event.time %} | {{ item.event.time }}{% endif %}
+                </td>
+                <td data-label="Place">{{ item.event.location }}</td>
+                <td data-label="Rejected">{{ item.reviewed_at|date:"d M Y, h:i A" }}</td>
+                <td data-label="Note">{{ item.admin_note|default:"-" }}</td>
+              </tr>
+            {% empty %}
+              <tr class="empty-row"><td colspan="6" class="empty-cell">No rejected requests.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+  <script>
+    (function () {
+      const selectAll = document.querySelector(".js-ad-select-all");
+      if (!selectAll) return;
+      const checkboxes = Array.from(document.querySelectorAll(".js-ad-select"));
+      selectAll.addEventListener("change", () => {
+        checkboxes.forEach((checkbox) => {
+          checkbox.checked = selectAll.checked;
+        });
+      });
+    })();
+  </script>
+{% endblock %}

@@ -4,7 +4,7 @@
 {% block content %}
   <section class="page-head">
     <h1>My Profile</h1>
-    <p>Manage username, contact and account information.</p>
+    <p>Manage your name, username, contact and account information.</p>
   </section>
 
   <section class="split-grid">
@@ -18,9 +18,9 @@
           height="78"
         />
       {% else %}
-        <div class="avatar big">{{ request.user.first_name|default:request.user.username|initials }}</div>
+        <div class="avatar big">{{ request.user.get_full_name|default:request.user.username|initials }}</div>
       {% endif %}
-      <h2>{{ request.user.first_name|default:request.user.username }}</h2>
+      <h2>{{ request.user.get_full_name|default:request.user.username }}</h2>
       <p>{{ current_profile.contact }}</p>
       <p class="muted">Role: {{ current_profile.role }}</p>
     </div>
@@ -28,6 +28,26 @@
     <div class="card">
       <form action="{% url 'profile' %}" method="post" enctype="multipart/form-data">
         {% csrf_token %}
+        <label for="first_name">First Name</label>
+        <input
+          id="first_name"
+          type="text"
+          name="first_name"
+          value="{{ request.user.first_name }}"
+          maxlength="150"
+          required
+        />
+
+        <label for="last_name">Last Name</label>
+        <input
+          id="last_name"
+          type="text"
+          name="last_name"
+          value="{{ request.user.last_name }}"
+          maxlength="150"
+          required
+        />
+
         <label for="username">Username</label>
         <input
           id="username"

@@ -1,0 +1,40 @@
+{% load static %}
+<header class="landing-header" id="{{ header_id|default:'home' }}">
+  <div class="landing-header-inner">
+    <div class="landing-logo">
+      <span class="landing-logo-mark">E</span>
+      <div class="landing-logo-copy">
+        <strong>Eventify</strong>
+        <span>Event Management Platform</span>
+      </div>
+    </div>
+    <form class="landing-nav-search" action="{{ search_action }}" method="get">
+      <input
+        type="text"
+        name="q"
+        value="{{ query }}"
+        placeholder="{{ search_placeholder|default:'Search by name / location / Category' }}"
+      />
+      {% if selected_category %}
+        <input type="hidden" name="category" value="{{ selected_category }}" />
+      {% endif %}
+      <button type="submit" class="primary-btn" aria-label="Search">
+        <img src="{% static 'img/search_data_10102577.png' %}" alt="" class="search-btn-icon" />
+      </button>
+    </form>
+    <nav class="landing-nav">
+      <a href="{{ home_href }}" {% if home_active %}class="active"{% endif %}>Home</a>
+      <a href="{{ events_href }}" {% if events_active %}class="active"{% endif %}>Events</a>
+      <a href="{{ about_href }}">About</a>
+      <a href="{{ contact_href }}">Contact</a>
+    </nav>
+    <div class="landing-auth">
+      {% if is_logged_in %}
+        <a href="{% url 'dashboard' %}" class="primary-btn">Dashboard</a>
+      {% else %}
+        <a href="{% url 'auth_role_page' %}?tab=register" class="primary-btn">Register</a>
+        <a href="{% url 'auth_role_page' %}?tab=login" class="primary-btn">Login</a>
+      {% endif %}
+    </div>
+  </div>
+</header>

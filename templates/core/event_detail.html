@@ -2,33 +2,17 @@
 {% load core_tags %}
 {% block title %}{{ event.title }} | Eventify{% endblock %}
 {% block content %}
-  <style>
-    .badge-private, .badge-public {
-      font-size: 14px;
-      padding: 4px 12px;
-      border-radius: 20px;
-      font-weight: normal;
-      margin-left: 10px;
-      vertical-align: middle;
-    }
-    .badge-private {
-      background: #fef3e2;
-      color: #b86e00;
-    }
-    .badge-public {
-      background: #e8f5e9;
-      color: #2e7d32;
-    }
-  </style>
   <section class="event-hero card">
 
     <div class="event-banner" data-bg="{{ event.image_source|default:'' }}">
-      <span class="category-chip dark">{{ event.category }}</span>
-      {% if event.is_private %}
-        <span class="badge-private">🔒 Private</span>
-      {% else %}
-        <span class="badge-public">🌐 Public</span>
-      {% endif %}
+      <div class="event-banner-meta">
+        <span class="category-chip dark">{{ event.category }}</span>
+        {% if event.is_private %}
+          <span class="event-visibility-badge private">Private Event</span>
+        {% else %}
+          <span class="event-visibility-badge public">Public Event</span>
+        {% endif %}
+      </div>
       <h1>{{ event.title }}</h1>
     </div>
     <div class="event-hero-content">

@@ -11,8 +11,10 @@ from django.contrib import messages
 from django.contrib.auth import logout
 from django.http import HttpResponseBadRequest, JsonResponse, QueryDict
 from django.shortcuts import redirect
+from django.urls import resolve
 from django.utils import timezone
 
+from .models import Profile
 from .security_controls import (
     get_session_timeout_seconds,
     initialize_secure_session,
@@ -213,3 +215,57 @@ class SessionSecurityMiddleware:
         if not getattr(request, "user", None) or not request.user.is_authenticated:
             return
         initialize_secure_session(request)
+
+
+class ProfileCompletionMiddleware:
+    """Redirect new users/organizers to complete profile before accessing the app."""
+
+    allowlist_names = {
+        "complete_profile",
+        "logout_submit",
+        "auth_page",
+        "auth_role_page",
+        "login_submit",
+        "register_send_otp",
+        "verify_otp",
+        "forgot_password",
+        "forgot_password_send_otp",
+        "reset_password",
+        "verify_2fa",
+        "social_login_google",
+        "social_login_github",
+        "verify_email",
+        "verify_email_confirm",
+    }
+
+    allowlist_prefixes = ("/static/", "/media/", "/api/")
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if not getattr(request, "user", None) or not request.user.is_authenticated:
+            return self.get_response(request)
+
+        profile = getattr(request.user, "profile", None)
+        if not profile:
+            profile = Profile.objects.filter(user=request.user).first()
+
+        if not profile or profile.role not in (Profile.ROLE_USER, Profile.ROLE_ORGANIZER):
+            return self.get_response(request)
+
+        if profile.profile_completed:
+            return self.get_response(request)
+
+        path = request.path or ""
+        if any(path.startswith(prefix) for prefix in self.allowlist_prefixes):
+            return self.get_response(request)
+
+        try:
+            match = resolve(path)
+            if match.url_name in self.allowlist_names:
+                return self.get_response(request)
+        except Exception:
+            pass
+
+        return redirect("complete_profile")

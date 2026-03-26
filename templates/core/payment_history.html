@@ -13,9 +13,59 @@
     </p>
   </section>
 
-  <section class="card">
-    <div class="table-wrap">
-      <table class="mobile-data-table">
+  <section class="card payment-history-card">
+    {% if mode == 'organizer' %}
+      <form method="get" class="filter-grid">
+        <div>
+          <label for="filter-user">User</label>
+          <select id="filter-user" name="user">
+            <option value="">All Users</option>
+            {% for user in filter_users %}
+              <option value="{{ user.id }}" {% if filters.user == user.id %}selected{% endif %}>
+                {{ user.get_full_name|default:user.username }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="filter-event">Event</label>
+          <select id="filter-event" name="event">
+            <option value="">All Events</option>
+            {% for event in filter_events %}
+              <option value="{{ event.id }}" {% if filters.event == event.id %}selected{% endif %}>
+                {{ event.title }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="filter-start">Start Date</label>
+          <input id="filter-start" type="date" name="start" value="{{ filters.start }}" />
+        </div>
+        <div>
+          <label for="filter-end">End Date</label>
+          <input id="filter-end" type="date" name="end" value="{{ filters.end }}" />
+        </div>
+        <div class="full-width inline-stack">
+          <button type="submit" class="small-btn">Apply Filters</button>
+          <a href="{% url 'payment_history' %}" class="small-btn">Reset</a>
+          <a
+            href="{% url 'payment_history_export_csv' %}{% if filter_query %}?{{ filter_query }}{% endif %}"
+            class="small-btn"
+          >
+            Download CSV
+          </a>
+          <a
+            href="{% url 'payment_history_export_pdf' %}{% if filter_query %}?{{ filter_query }}{% endif %}"
+            class="small-btn"
+          >
+            Download PDF
+          </a>
+        </div>
+      </form>
+    {% endif %}
+    <div class="table-wrap payment-history-table-wrap">
+      <table class="mobile-data-table payment-history-table">
         <thead>
           <tr>
             <th>Date</th>
@@ -41,16 +91,40 @@
                   {{ item.paid_at|datetime_human }}
                 {% endif %}
               </td>
-              <td data-label="Event">{{ item.booking.event.title }}</td>
+              <td class="payment-history-event-cell" data-label="Event">
+                <span class="payment-history-event-title">{{ item.booking.event.title }}</span>
+              </td>
               <td data-label="Ticket Type">{{ item.booking.ticket_type.name|default:'Standard' }}</td>
-              {% if mode == 'organizer' %}<td data-label="Customer">{{ item.booking.user.first_name|default:item.booking.user.username }}</td>{% endif %}
+              {% if mode == 'organizer' %}
+                <td data-label="Customer">
+                  <div class="table-user">
+                    {% with user_profile=item.booking.user.profile %}
+                      {% if user_profile and user_profile.profile_image %}
+                        <img
+                          src="{{ user_profile.profile_image.url }}"
+                          alt="{{ item.booking.user.get_full_name|default:item.booking.user.username }}"
+                          class="avatar avatar-img"
+                          width="34"
+                          height="34"
+                        />
+                      {% else %}
+                        <span class="avatar">{{ item.booking.user.get_full_name|default:item.booking.user.username|initials }}</span>
+                      {% endif %}
+                    {% endwith %}
+                    <div class="table-user-meta">
+                      <strong>{{ item.booking.user.get_full_name|default:item.booking.user.username }}</strong>
+                      <small class="muted">{{ item.booking.user.email|default:'-' }}</small>
+                    </div>
+                  </div>
+                </td>
+              {% endif %}
               <td data-label="Method">{{ item.method|default:'-' }}</td>
-              <td data-label="Details">{{ item.method_detail_summary }}</td>
+              <td class="payment-history-detail-cell" data-label="Details">{{ item.method_detail_summary }}</td>
               <td data-label="Status"><span class="badge {{ item.status|badge_class }}">{{ item.status }}</span></td>
               <td data-label="Amount">{{ item.amount|money }}</td>
-              <td data-label="Transaction ID">{{ item.transaction_ref|default:'-' }}</td>
-              <td data-label="Coupon">{{ item.coupon_code|default:'-' }}</td>
-              <td data-label="Action">
+              <td class="payment-history-ref-cell" data-label="Transaction ID">{{ item.transaction_ref|default:'-' }}</td>
+              <td class="payment-history-coupon-cell" data-label="Coupon">{{ item.coupon_code|default:'-' }}</td>
+              <td class="payment-history-action-cell" data-label="Action">
                 <div class="action-row">
                   {% if item.booking.payment_status == 'paid' or item.booking.payment_status == 'refunded' %}
                     <a href="{% url 'download_invoice' item.booking.id %}" class="small-btn">Invoice</a>

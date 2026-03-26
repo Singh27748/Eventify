@@ -1,0 +1,136 @@
+{% extends "core/base_app.html" %}
+{% load core_tags %}
+{% block title %}Support Ticket #{{ ticket.id }} | Eventify{% endblock %}
+{% block content %}
+  <div class="admin-page">
+    <section class="admin-page-head">
+      <div class="page-head">
+        <h1>Support Ticket #{{ ticket.id }}</h1>
+        <p>Review the request, inspect AI chat context, generate a draft, and send an approved reply.</p>
+      </div>
+      <div class="page-head-actions">
+        <a href="{% url 'admin_support' %}" class="small-btn">Back To Inbox</a>
+      </div>
+    </section>
+
+    <section class="support-detail-grid">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <span class="admin-table-kicker">Ticket Summary</span>
+            <h2>{{ ticket.subject }}</h2>
+          </div>
+          <span class="badge {{ ticket.status|badge_class }}">{{ ticket.status }}</span>
+        </div>
+        <div class="support-ticket-meta">
+          <p><strong>User:</strong> {{ ticket.user.get_full_name|default:ticket.user.username }}</p>
+          <p><strong>Email:</strong> {{ ticket.user.email|default:"Not configured" }}</p>
+          <p><strong>Source:</strong> {{ ticket.get_source_display }}</p>
+          <p><strong>Created:</strong> {{ ticket.created_at|datetime_human }}</p>
+        </div>
+        <div class="support-ticket-block">
+          <h3>User Message</h3>
+          <p>{{ ticket.message|linebreaksbr }}</p>
+        </div>
+        {% if ticket.ai_summary %}
+          <div class="support-ticket-block">
+            <h3>AI Summary</h3>
+            <p>{{ ticket.ai_summary|linebreaksbr }}</p>
+          </div>
+        {% endif %}
+        {% if ticket.status != 'resolved' %}
+          <form action="{% url 'admin_resolve_ticket' ticket.id %}" method="post" class="inline-form">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{% url 'admin_support_detail' ticket.id %}" />
+            <button type="submit" class="small-btn" data-confirm="Mark this support ticket as resolved?">Resolve Ticket</button>
+          </form>
+        {% endif %}
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <span class="admin-table-kicker">AI Assistant</span>
+            <h2>Reply Draft</h2>
+          </div>
+        </div>
+        <p class="muted support-ai-banner">{{ support_ai_banner }}</p>
+        <form action="{% url 'admin_generate_support_reply' ticket.id %}" method="post" class="inline-form">
+          {% csrf_token %}
+          <button type="submit" class="primary-btn">Generate AI Reply Draft</button>
+        </form>
+
+        <form action="{% url 'admin_send_support_reply' ticket.id %}" method="post" class="support-reply-form">
+          {% csrf_token %}
+          {% if draft_reply %}
+            <input type="hidden" name="reply_id" value="{{ draft_reply.id }}" />
+          {% endif %}
+          <label>Subject</label>
+          <input
+            type="text"
+            name="subject"
+            maxlength="180"
+            value="{% if draft_reply %}{{ draft_reply.subject }}{% else %}Update on your Eventify support request #{{ ticket.id }}{% endif %}"
+            required
+          />
+
+          <label>Reply Body</label>
+          <textarea name="body" rows="12" maxlength="4000" required>{% if draft_reply %}{{ draft_reply.body }}{% endif %}</textarea>
+
+          <button type="submit" class="primary-btn">Send Approved Reply</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="support-detail-grid">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <span class="admin-table-kicker">Conversation</span>
+            <h2>Linked AI Transcript</h2>
+          </div>
+        </div>
+        <div class="support-ai-transcript support-ai-transcript-admin">
+          {% for item in conversation_messages %}
+            <article class="support-ai-message support-ai-message-{{ item.sender_type }}">
+              <span class="support-ai-role">{{ item.sender_type|title }}</span>
+              <p>{{ item.content|linebreaksbr }}</p>
+              <small>{{ item.created_at|datetime_human }}</small>
+            </article>
+          {% empty %}
+            <div class="support-ai-empty">No AI conversation is linked to this support ticket.</div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <span class="admin-table-kicker">Reply History</span>
+            <h2>Sent And Saved Replies</h2>
+          </div>
+        </div>
+        <div class="ticket-list">
+          {% for item in reply_history %}
+            <article class="ticket-item">
+              <div>
+                <h3>{{ item.subject }}</h3>
+                <p>{{ item.body|linebreaksbr }}</p>
+                <span>
+                  {{ item.admin.get_full_name|default:item.admin.username }}
+                  {% if item.sent_at %} • Sent {{ item.sent_at|datetime_human }}{% else %} • Draft{% endif %}
+                </span>
+              </div>
+              <div class="ticket-item-meta">
+                <span class="badge {{ item.status|badge_class }}">{{ item.status }}</span>
+                <span class="ticket-source">{% if item.ai_generated %}AI Draft{% else %}Manual{% endif %}</span>
+              </div>
+            </article>
+          {% empty %}
+            <p class="empty-text">No replies have been drafted or sent yet.</p>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+  </div>
+{% endblock %}

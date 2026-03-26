@@ -1,0 +1,13 @@
+<div class="{{ wrapper_class|default:'action-row' }}">
+  <a href="{% url 'event_detail' event.id %}" class="small-btn">Details</a>
+  <a href="{% url 'edit_event' event.id %}" class="small-btn">Edit</a>
+  <a href="{% url 'event_schedule_add' event.id %}" class="small-btn">Schedule</a>
+  <a href="{% url 'event_gallery_add' event.id %}" class="small-btn">Gallery</a>
+  {% if event.is_private and event.private_payment and event.private_payment.status != 'paid' %}
+    <a href="{% url 'private_event_payment_page' event.private_payment.id %}" class="small-btn">Pay Private</a>
+  {% endif %}
+  <form action="{% url 'delete_event' event.id %}" method="post" class="inline-form">
+    {% csrf_token %}
+    <button type="submit" class="danger-btn" data-confirm="Delete this event?">Delete</button>
+  </form>
+</div>

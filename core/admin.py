@@ -8,8 +8,10 @@ from django.contrib import admin
 from .models import (
     Booking,
     Event,
+    EventAdvertisement,
     EventActivitySlot,
     EventHelperSlot,
+    HomepageHeroPromo,
     LoginThrottle,
     Notification,
     OTPRequest,
@@ -17,6 +19,9 @@ from .models import (
     Profile,
     PromoCode,
     SecurityAuditLog,
+    SupportConversation,
+    SupportMessage,
+    SupportReply,
     SupportTicket,
 )
 
@@ -29,6 +34,7 @@ admin.site.register(EventActivitySlot)
 admin.site.register(EventHelperSlot)
 admin.site.register(Booking)
 admin.site.register(LoginThrottle)
+admin.site.register(EventAdvertisement)
 
 
 @admin.register(Payment)
@@ -55,8 +61,30 @@ class PromoCodeAdmin(admin.ModelAdmin):
     search_fields = ("code", "description")
 
 
+@admin.register(HomepageHeroPromo)
+class HomepageHeroPromoAdmin(admin.ModelAdmin):
+    list_display = ("headline", "eyebrow", "is_active", "updated_at")
+    list_filter = ("is_active", "updated_at")
+    search_fields = ("headline", "eyebrow", "description")
+
+
 admin.site.register(Notification)
-admin.site.register(SupportTicket)
+admin.site.register(SupportConversation)
+admin.site.register(SupportMessage)
+
+
+@admin.register(SupportTicket)
+class SupportTicketAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "subject", "source", "status", "created_at")
+    list_filter = ("status", "source", "created_at")
+    search_fields = ("subject", "message", "ai_summary", "user__username", "user__email")
+
+
+@admin.register(SupportReply)
+class SupportReplyAdmin(admin.ModelAdmin):
+    list_display = ("id", "ticket", "admin", "status", "ai_generated", "sent_at", "updated_at")
+    list_filter = ("status", "ai_generated", "updated_at")
+    search_fields = ("subject", "body", "ticket__subject", "ticket__user__email")
 
 
 @admin.register(SecurityAuditLog)

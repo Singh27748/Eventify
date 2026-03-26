@@ -10,6 +10,9 @@
       </div>
       <div class="admin-page-meta">
         <span class="admin-page-badge">{{ events|length }} events</span>
+        <button type="button" class="primary-btn" onclick="showAdminEventTypeModal()">
+          Create New Event
+        </button>
       </div>
     </section>
 
@@ -50,4 +53,57 @@
       </div>
     </section>
   </div>
+
+  <div id="adminEventTypeModal" class="dashboard-type-modal" hidden>
+    <div class="dashboard-type-dialog" role="dialog" aria-modal="true" aria-labelledby="adminEventTypeModalTitle">
+      <div class="dashboard-type-head">
+        <h2 id="adminEventTypeModalTitle">Create New Event</h2>
+        <button type="button" class="dashboard-type-close" onclick="closeAdminEventTypeModal()" aria-label="Close">
+          &times;
+        </button>
+      </div>
+      <p class="dashboard-type-question">Choose the event visibility that best matches your next launch.</p>
+      <div class="dashboard-type-grid">
+        <a href="{% url 'new_event' %}?event_type=public" class="dashboard-type-option">
+          <span class="dashboard-type-badge">PUB</span>
+          <h3>Public Event</h3>
+          <p>Visible to everyone and bookable from the main events experience.</p>
+        </a>
+        <a href="{% url 'new_event' %}?event_type=private" class="dashboard-type-option">
+          <span class="dashboard-type-badge">PVT</span>
+          <h3>Private Event</h3>
+          <p>Shared only with invited guests or direct access links.</p>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function showAdminEventTypeModal() {
+      const modal = document.getElementById("adminEventTypeModal");
+      if (modal) {
+        modal.hidden = false;
+      }
+    }
+
+    function closeAdminEventTypeModal() {
+      const modal = document.getElementById("adminEventTypeModal");
+      if (modal) {
+        modal.hidden = true;
+      }
+    }
+
+    (function() {
+      const modal = document.getElementById("adminEventTypeModal");
+      if (!modal) {
+        return;
+      }
+
+      modal.addEventListener("click", function(event) {
+        if (event.target === modal) {
+          closeAdminEventTypeModal();
+        }
+      });
+    })();
+  </script>
 {% endblock %}

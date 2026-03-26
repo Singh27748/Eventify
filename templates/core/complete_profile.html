@@ -1,0 +1,62 @@
+{% extends "core/base_auth.html" %}
+{% load core_tags %}
+{% block title %}Complete Profile | Eventify{% endblock %}
+{% block content %}
+  <div class="auth-page">
+    <div class="auth-overlay"></div>
+    <div class="auth-card">
+      <div class="auth-brand">
+        <h1>Complete Your Profile</h1>
+        <p>Please add your name to access the dashboard. A profile photo is optional but recommended.</p>
+      </div>
+
+      {% if messages %}
+        {% for message in messages %}
+          <div class="flash flash-{{ message.tags }}" data-auto-dismiss="true">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+
+      <form action="{% url 'complete_profile' %}" method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+
+        {% if current_profile.profile_image %}
+          <img
+            src="{{ current_profile.profile_image.url }}"
+            alt="Profile"
+            class="avatar big avatar-img"
+            width="78"
+            height="78"
+          />
+        {% else %}
+          <div class="avatar big">{{ request.user.get_full_name|default:request.user.username|initials }}</div>
+        {% endif %}
+
+        <label for="first_name">First Name</label>
+        <input
+          id="first_name"
+          type="text"
+          name="first_name"
+          value="{{ request.user.first_name }}"
+          maxlength="150"
+          required
+        />
+
+        <label for="last_name">Last Name</label>
+        <input
+          id="last_name"
+          type="text"
+          name="last_name"
+          value="{{ request.user.last_name }}"
+          maxlength="150"
+          required
+        />
+
+        <label for="profile-image">Profile Image (optional)</label>
+        <input id="profile-image" type="file" name="profile_image" accept="image/*" />
+        <p class="muted">Upload JPG, PNG, or WEBP (max 2MB).</p>
+
+        <button type="submit" class="primary-btn">Save & Continue</button>
+      </form>
+    </div>
+  </div>
+{% endblock %}

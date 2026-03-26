@@ -57,6 +57,7 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
     'core.middleware.PanelTransportEncryptionMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'core.middleware.ProfileCompletionMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'core.middleware.SessionSecurityMiddleware',
     'core.middleware.SecurityHeadersMiddleware',
@@ -177,6 +178,7 @@ DJANGO_ADMIN_URL = (
     (os.getenv("DJANGO_ADMIN_URL", "secure-admin-portal") or "secure-admin-portal").strip("/")
     + "/"
 )
+DEFAULT_ADMIN_EMAIL = (os.getenv("DEFAULT_ADMIN_EMAIL", "asing27748@gmail.com") or "asing27748@gmail.com").strip().lower()
 
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
@@ -232,3 +234,12 @@ GITHUB_OAUTH_REDIRECT_URI = os.getenv("GITHUB_OAUTH_REDIRECT_URI", "").strip()
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "").strip()
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "").strip()
 RAZORPAY_CURRENCY = os.getenv("RAZORPAY_CURRENCY", "INR").strip() or "INR"
+
+# AI support assistant configuration
+AI_SUPPORT_PROVIDER = (os.getenv("AI_SUPPORT_PROVIDER", "ollama") or "ollama").strip().lower()
+AI_SUPPORT_OLLAMA_BASE_URL = (
+    os.getenv("AI_SUPPORT_OLLAMA_BASE_URL", "http://127.0.0.1:11434/api")
+    or "http://127.0.0.1:11434/api"
+).rstrip("/")
+AI_SUPPORT_CHAT_MODEL = os.getenv("AI_SUPPORT_CHAT_MODEL", "llama3.1:8b").strip() or "llama3.1:8b"
+AI_SUPPORT_TIMEOUT_SECONDS = int(os.getenv("AI_SUPPORT_TIMEOUT_SECONDS", "15") or "15")

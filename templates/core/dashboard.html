@@ -2,170 +2,233 @@
 {% load core_tags %}
 {% block title %}Dashboard | Eventify{% endblock %}
 {% block content %}
-  <section class="page-head dashboard-page-head{% if role_mode == 'organizer' %} organizer-hero{% endif %}">
-    <div class="dashboard-page-head-main">
-      <h1>Dashboard</h1>
+  <section class="dashboard-hero {% if role_mode == 'organizer' %}dashboard-hero-organizer{% else %}dashboard-hero-user{% endif %}">
+    <div class="dashboard-hero-copy">
+      <h1>
+        {% if role_mode == "organizer" %}
+          Run your events from one polished control center.
+        {% else %}
+          Track bookings, spending and upcoming plans in one place.
+        {% endif %}
+      </h1>
       <p>
         {% if role_mode == "organizer" %}
-          Organizer summary, booking activity and event performance.
+          See event performance, manage ticket checks and stay on top of booking activity without leaving the dashboard.
         {% else %}
-          Summary cards, recent bookings and upcoming events.
+          Review your latest bookings, upcoming public events and total spending through a cleaner dashboard experience.
         {% endif %}
       </p>
-    </div>
-    {% if role_mode == "organizer" %}
-      <div class="page-head-actions">
-        <button type="button" class="primary-btn dashboard-create-btn" onclick="showEventTypeModal()">
-          <span aria-hidden="true">+</span>
-          Create New Event
-        </button>
+
+      <div class="dashboard-hero-chips">
+        {% if role_mode == "organizer" %}
+          <span>Events {{ stats.total_events }}</span>
+          <span>Bookings {{ stats.total_bookings }}</span>
+          <span>Net {{ stats.total_revenue|money }}</span>
+          <span>Pending {{ stats.pending_requests }}</span>
+        {% else %}
+          <span>Bookings {{ stats.total_bookings }}</span>
+          <span>Upcoming {{ stats.upcoming_events }}</span>
+          <span>Completed {{ stats.completed_events }}</span>
+          <span>Spent {{ stats.total_spending|money }}</span>
+        {% endif %}
       </div>
-      
-      <!-- Event Type Selection Modal -->
-      <div id="eventTypeModal" class="modal-overlay hidden">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h2>Create New Event</h2>
-            <button type="button" class="modal-close" onclick="closeEventTypeModal()">&times;</button>
-          </div>
-          <div class="modal-body">
-            <p class="modal-question">Is this event <strong>Private</strong> or <strong>Public</strong>?</p>
-            <div class="event-type-options">
-              <a href="{% url 'new_event' %}?event_type=public" class="event-type-card">
-                <div class="event-type-icon">🌐</div>
-                <h3>Public Event</h3>
-                <p>Anyone can find and book this event from the events page.</p>
-              </a>
-              <a href="{% url 'new_event' %}?event_type=private" class="event-type-card">
-                <div class="event-type-icon">🔒</div>
-                <h3>Private Event</h3>
-                <p>Only people with the direct link can book this event.</p>
-              </a>
+
+      <div class="dashboard-hero-actions">
+        {% if role_mode == "organizer" %}
+          <button type="button" class="primary-btn dashboard-hero-primary" onclick="showEventTypeModal()">
+            <span aria-hidden="true">+</span>
+            Create New Event
+          </button>
+          <a href="{% url 'organizer_bookings' %}" class="secondary-btn dashboard-hero-secondary">View Bookings</a>
+        {% else %}
+          <a href="{% url 'browse_events' %}" class="primary-btn dashboard-hero-primary">Browse Events</a>
+          <a href="{% url 'my_bookings' %}" class="secondary-btn dashboard-hero-secondary">My Bookings</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="dashboard-hero-preview">
+      <div class="dashboard-preview-card">
+        <div class="dashboard-preview-media">
+          {% if focus_event and focus_event.image_source %}
+            <img src="{{ focus_event.image_source }}" alt="{{ focus_event.title }}" loading="lazy" />
+          {% else %}
+            <div class="dashboard-preview-fallback"></div>
+          {% endif %}
+        </div>
+
+        <div class="dashboard-preview-copy">
+          <span class="dashboard-preview-kicker">
+            {% if role_mode == "organizer" %}
+              Next Event In Focus
+            {% else %}
+              Explore Next
+            {% endif %}
+          </span>
+          {% if focus_event %}
+            <h2>{{ focus_event.title }}</h2>
+            <p>{{ focus_event.date|date_human }} | {{ focus_event.location }}</p>
+            <div class="dashboard-preview-metrics">
+              <div>
+                <span>Price</span>
+                <strong>{{ focus_event.price|money }}</strong>
+              </div>
+              <div>
+                <span>Category</span>
+                <strong>{{ focus_event.category }}</strong>
+              </div>
             </div>
-          </div>
+            <a href="{% url 'event_detail' focus_event.id %}" class="small-btn dashboard-preview-link">Open Event</a>
+          {% else %}
+            <h2>
+              {% if role_mode == "organizer" %}
+                No upcoming event planned yet
+              {% else %}
+                No upcoming events available
+              {% endif %}
+            </h2>
+            <p>
+              {% if role_mode == "organizer" %}
+                Create or schedule a future event to feature it here.
+              {% else %}
+                Browse events to start booking and building your history here.
+              {% endif %}
+            </p>
+          {% endif %}
         </div>
       </div>
-      
-      <style>
-        .modal-overlay {
-          position: fixed;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          background: rgba(0, 0, 0, 0.5);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          z-index: 1000;
+    </div>
+  </section>
+
+  {% if role_mode == "organizer" %}
+    <div id="eventTypeModal" class="dashboard-type-modal" hidden>
+      <div class="dashboard-type-dialog" role="dialog" aria-modal="true" aria-labelledby="eventTypeModalTitle">
+        <div class="dashboard-type-head">
+          <h2 id="eventTypeModalTitle">Create New Event</h2>
+          <button type="button" class="dashboard-type-close" onclick="closeEventTypeModal()" aria-label="Close">
+            &times;
+          </button>
+        </div>
+        <p class="dashboard-type-question">Choose the event visibility that best matches your next launch.</p>
+        <div class="dashboard-type-grid">
+          <a href="{% url 'new_event' %}?event_type=public" class="dashboard-type-option">
+            <span class="dashboard-type-badge">PUB</span>
+            <h3>Public Event</h3>
+            <p>Visible to everyone and bookable from the main events experience.</p>
+          </a>
+          <a href="{% url 'new_event' %}?event_type=private" class="dashboard-type-option">
+            <span class="dashboard-type-badge">PVT</span>
+            <h3>Private Event</h3>
+            <p>Shared only with invited guests or direct access links.</p>
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      function showEventTypeModal() {
+        const modal = document.getElementById("eventTypeModal");
+        if (modal) {
+          modal.hidden = false;
         }
-        .modal-content {
-          background: white;
-          border-radius: 12px;
-          max-width: 500px;
-          width: 90%;
-          box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+      }
+
+      function closeEventTypeModal() {
+        const modal = document.getElementById("eventTypeModal");
+        if (modal) {
+          modal.hidden = true;
         }
-        .modal-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 20px 24px;
-          border-bottom: 1px solid #e4eaf8;
+      }
+
+      (function() {
+        const modal = document.getElementById("eventTypeModal");
+        if (!modal) {
+          return;
         }
-        .modal-header h2 {
-          margin: 0;
-          font-size: 20px;
-          color: #182342;
-        }
-        .modal-close {
-          background: none;
-          border: none;
-          font-size: 28px;
-          color: #6072a3;
-          cursor: pointer;
-          line-height: 1;
-        }
-        .modal-close:hover {
-          color: #182342;
-        }
-        .modal-body {
-          padding: 24px;
-        }
-        .modal-question {
-          text-align: center;
-          font-size: 16px;
-          color: #3659a7;
-          margin-bottom: 24px;
-        }
-        .event-type-options {
-          display: flex;
-          gap: 16px;
-        }
-        .event-type-card {
-          flex: 1;
-          text-decoration: none;
-          padding: 20px;
-          border: 2px solid #e4eaf8;
-          border-radius: 10px;
-          text-align: center;
-          transition: all 0.2s ease;
-        }
-        .event-type-card:hover {
-          border-color: #1f4fb9;
-          background: #f6f8ff;
-        }
-        .event-type-icon {
-          font-size: 36px;
-          margin-bottom: 10px;
-        }
-        .event-type-card h3 {
-          margin: 0 0 8px 0;
-          font-size: 16px;
-          color: #182342;
-        }
-        .event-type-card p {
-          margin: 0;
-          font-size: 13px;
-          color: #6072a3;
-        }
-      </style>
-      
-      <script>
-        function showEventTypeModal() {
-          document.getElementById('eventTypeModal').style.display = 'flex';
-        }
-        function closeEventTypeModal() {
-          document.getElementById('eventTypeModal').style.display = 'none';
-        }
-        // Close modal when clicking outside
-        document.getElementById('eventTypeModal').addEventListener('click', function(e) {
-          if (e.target === this) {
+
+        modal.addEventListener("click", function(event) {
+          if (event.target === modal) {
             closeEventTypeModal();
           }
         });
-      </script>
-      <div class="dashboard-page-head-photo" aria-hidden="true">
-        {% with top_event=upcoming_events.0 %}
-          {% if top_event and top_event.image_source %}
-            <img src="{{ top_event.image_source }}" alt="" loading="lazy" />
-          {% else %}
-            <div class="dashboard-page-head-photo-fallback"></div>
-          {% endif %}
-        {% endwith %}
-      </div>
+      })();
+    </script>
+  {% endif %}
+
+  <section class="dashboard-metric-grid">
+    {% if role_mode == "organizer" %}
+      <article class="dashboard-metric-card tone-blue">
+        <span class="dashboard-metric-kicker">Total Events</span>
+        <strong>{{ stats.total_events }}</strong>
+        <p>Active events currently managed from your workspace.</p>
+      </article>
+      <article class="dashboard-metric-card tone-violet">
+        <span class="dashboard-metric-kicker">Total Bookings</span>
+        <strong>{{ stats.total_bookings }}</strong>
+        <p>All booking records across your event portfolio.</p>
+      </article>
+      <article class="dashboard-metric-card tone-green">
+        <span class="dashboard-metric-kicker">Net Revenue</span>
+        <strong>{{ stats.total_revenue|money }}</strong>
+        <p>Earnings after refund deductions.</p>
+      </article>
+      <article class="dashboard-metric-card tone-amber">
+        <span class="dashboard-metric-kicker">Tickets Sold</span>
+        <strong>{{ stats.total_tickets_sold }}</strong>
+        <p>Paid tickets converted into confirmed sales.</p>
+      </article>
+      <article class="dashboard-metric-card tone-rose">
+        <span class="dashboard-metric-kicker">Gross Earnings</span>
+        <strong>{{ stats.gross_earnings|money }}</strong>
+        <p>Total successful payment volume before refunds.</p>
+      </article>
+      <article class="dashboard-metric-card tone-copper">
+        <span class="dashboard-metric-kicker">Refunds</span>
+        <strong>{{ stats.refund_total|money }}</strong>
+        <p>Total amount returned across cancelled bookings.</p>
+      </article>
+      <article class="dashboard-metric-card tone-slate">
+        <span class="dashboard-metric-kicker">Pending Requests</span>
+        <strong>{{ stats.pending_requests }}</strong>
+        <p>Bookings waiting for action or payment follow-up.</p>
+      </article>
+    {% else %}
+      <article class="dashboard-metric-card tone-blue">
+        <span class="dashboard-metric-kicker">Total Bookings</span>
+        <strong>{{ stats.total_bookings }}</strong>
+        <p>All bookings made with your account.</p>
+      </article>
+      <article class="dashboard-metric-card tone-violet">
+        <span class="dashboard-metric-kicker">Upcoming Events</span>
+        <strong>{{ stats.upcoming_events }}</strong>
+        <p>Booked events that are still ahead on your calendar.</p>
+      </article>
+      <article class="dashboard-metric-card tone-green">
+        <span class="dashboard-metric-kicker">Completed Events</span>
+        <strong>{{ stats.completed_events }}</strong>
+        <p>Events you already attended or finished.</p>
+      </article>
+      <article class="dashboard-metric-card tone-amber">
+        <span class="dashboard-metric-kicker">Total Spending</span>
+        <strong>{{ stats.total_spending|money }}</strong>
+        <p>Your net spending after successful refunds.</p>
+      </article>
     {% endif %}
   </section>
 
   {% if role_mode == "organizer" %}
     <section
       id="ticket-scanner"
-      class="card ticket-scanner-card"
+      class="dashboard-panel dashboard-scanner-panel"
       data-ticket-scanner
       data-ticket-lookup-url="{% url 'ticket_lookup' %}"
     >
-      <div class="card-head">
-        <h2>Ticket Chacker</h2>
+      <div class="dashboard-panel-head">
+        <div>
+          <span class="dashboard-panel-kicker">Operations</span>
+          <h2>Ticket Scanner</h2>
+        </div>
+        <p class="dashboard-panel-note">Open attendee tickets instantly using a ticket ID at the venue desk.</p>
       </div>
       <div class="ticket-scanner-grid">
         <div class="ticket-scanner-controls ticket-checker-desktop" data-ticket-scan-controls>
@@ -195,65 +258,16 @@
         </div>
       </div>
     </section>
-  {% endif %}
 
-  <section class="stat-grid">
-    {% if role_mode == "organizer" %}
-      <article class="stat-card blue">
-        <h3>Total Events</h3>
-        <strong>{{ stats.total_events }}</strong>
-      </article>
-      <article class="stat-card purple">
-        <h3>Total Bookings</h3>
-        <strong>{{ stats.total_bookings }}</strong>
-      </article>
-      <article class="stat-card green">
-        <h3>Net Revenue</h3>
-        <strong>{{ stats.total_revenue|money }}</strong>
-      </article>
-      <article class="stat-card orange">
-        <h3>Total Tickets Sold</h3>
-        <strong>{{ stats.total_tickets_sold }}</strong>
-      </article>
-      <article class="stat-card purple">
-        <h3>Gross Earnings</h3>
-        <strong>{{ stats.gross_earnings|money }}</strong>
-      </article>
-      <article class="stat-card orange">
-        <h3>Total Refunds</h3>
-        <strong>{{ stats.refund_total|money }}</strong>
-      </article>
-      <article class="stat-card blue">
-        <h3>Pending Requests</h3>
-        <strong>{{ stats.pending_requests }}</strong>
-      </article>
-    {% else %}
-      <article class="stat-card blue">
-        <h3>Total Bookings</h3>
-        <strong>{{ stats.total_bookings }}</strong>
-      </article>
-      <article class="stat-card purple">
-        <h3>Upcoming Events</h3>
-        <strong>{{ stats.upcoming_events }}</strong>
-      </article>
-      <article class="stat-card green">
-        <h3>Completed Events</h3>
-        <strong>{{ stats.completed_events }}</strong>
-      </article>
-      <article class="stat-card orange">
-        <h3>Total Spending</h3>
-        <strong>{{ stats.total_spending|money }}</strong>
-      </article>
-    {% endif %}
-  </section>
-
-  {% if role_mode == "organizer" %}
-    <section class="card">
-      <div class="card-head">
-        <h2>Event-wise Revenue</h2>
-        <a href="{% url 'payment_history' %}">View Transactions</a>
+    <section class="dashboard-panel dashboard-table-panel">
+      <div class="dashboard-panel-head">
+        <div>
+          <span class="dashboard-panel-kicker">Revenue</span>
+          <h2>Event-wise Revenue</h2>
+        </div>
+        <a href="{% url 'payment_history' %}" class="dashboard-panel-link">View Transactions</a>
       </div>
-      <div class="table-wrap">
+      <div class="table-wrap dashboard-table-wrap">
         <table class="mobile-data-table">
           <thead>
             <tr>
@@ -286,19 +300,26 @@
     </section>
   {% endif %}
 
-  <section class="split-grid">
-    <div class="card">
-      <div class="card-head">
-        <h2>{% if role_mode == "organizer" %}Recent Bookings{% else %}My Recent Bookings{% endif %}</h2>
+  <section class="dashboard-content-grid">
+    <div class="dashboard-panel dashboard-table-panel">
+      <div class="dashboard-panel-head">
+        <div>
+          <span class="dashboard-panel-kicker">Activity</span>
+          <h2>{% if role_mode == "organizer" %}Recent Bookings{% else %}My Recent Bookings{% endif %}</h2>
+        </div>
+        {% if role_mode == "organizer" %}
+          <a href="{% url 'organizer_bookings' %}" class="dashboard-panel-link">View All</a>
+        {% else %}
+          <a href="{% url 'my_bookings' %}" class="dashboard-panel-link">View All</a>
+        {% endif %}
       </div>
-      <div class="table-wrap">
+      <div class="table-wrap dashboard-table-wrap">
         <table class="mobile-data-table">
           <thead>
             <tr>
               {% if role_mode == "organizer" %}<th>Customer</th>{% endif %}
               <th>Event</th>
               <th>Date</th>
-              <th>Status</th>
               <th>Amount</th>
             </tr>
           </thead>
@@ -308,12 +329,11 @@
                 {% if role_mode == "organizer" %}<td data-label="Customer">{{ item.attendee_name|default:item.user.get_full_name|default:item.user.email|default:item.user.username }}</td>{% endif %}
                 <td data-label="Event">{{ item.event.title }}</td>
                 <td data-label="Date">{{ item.event.date|date_human }}</td>
-                <td data-label="Status"><span class="badge {{ item.status|badge_class }}">{{ item.status }}</span></td>
                 <td data-label="Amount">{{ item.total_amount|money }}</td>
               </tr>
             {% empty %}
               <tr class="empty-row">
-                <td colspan="{% if role_mode == 'organizer' %}5{% else %}4{% endif %}" class="empty-cell">No recent bookings found.</td>
+                <td colspan="{% if role_mode == 'organizer' %}4{% else %}3{% endif %}" class="empty-cell">No recent bookings found.</td>
               </tr>
             {% endfor %}
           </tbody>
@@ -321,29 +341,58 @@
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-head">
-        <h2>{% if role_mode == "organizer" %}My Events{% else %}Upcoming Events{% endif %}</h2>
+    <div class="dashboard-panel dashboard-events-panel">
+      <div class="dashboard-panel-head">
+        <div>
+          <span class="dashboard-panel-kicker">
+            {% if role_mode == "organizer" %}
+              Portfolio
+            {% else %}
+              Discovery
+            {% endif %}
+          </span>
+          <h2>{% if role_mode == "organizer" %}My Events{% else %}Upcoming Events{% endif %}</h2>
+        </div>
         {% if role_mode == "organizer" %}
-          <a href="{% url 'my_events' %}">View All</a>
+          <a href="{% url 'my_events' %}" class="dashboard-panel-link">View All</a>
         {% else %}
-          <a href="{% url 'browse_events' %}">View All</a>
+          <a href="{% url 'browse_events' %}" class="dashboard-panel-link">View All</a>
         {% endif %}
       </div>
-      <div class="event-list">
+
+      <div class="dashboard-event-stack">
         {% for event in upcoming_events %}
-          <article class="event-item">
-            <h3>{{ event.title }}</h3>
-            <p>{{ event.date|date_human }} | {{ event.location }}</p>
-            <div class="action-row">
-              <a href="{% url 'event_detail' event.id %}" class="small-btn">View Details</a>
-              {% if role_mode == "organizer" %}
-                <a href="{% url 'edit_event' event.id %}" class="small-btn">Edit</a>
-                <form action="{% url 'delete_event' event.id %}" method="post" class="inline-form">
-                  {% csrf_token %}
-                  <button type="submit" class="danger-btn" data-confirm="Delete this event?">Delete</button>
-                </form>
+          <article class="dashboard-event-card">
+            <a
+              href="{% url 'event_detail' event.id %}"
+              class="dashboard-event-media"
+              aria-label="{{ event.title }}"
+            >
+              {% if event.image_source %}
+                <img src="{{ event.image_source }}" alt="{{ event.title }}" loading="lazy" />
+              {% else %}
+                <span class="dashboard-event-media-fallback"></span>
               {% endif %}
+            </a>
+
+            <div class="dashboard-event-body">
+              <div class="dashboard-event-copy">
+                <h3>{{ event.title }}</h3>
+                <p>{{ event.date|date_human }} | {{ event.location }}</p>
+                <strong>{{ event.price|money }}</strong>
+              </div>
+              <div class="dashboard-event-actions">
+                <a href="{% url 'event_detail' event.id %}" class="small-btn">
+                  {% if role_mode == "organizer" %}View Details{% else %}View Event{% endif %}
+                </a>
+                {% if role_mode == "organizer" %}
+                  <a href="{% url 'edit_event' event.id %}" class="small-btn">Edit</a>
+                  <form action="{% url 'delete_event' event.id %}" method="post" class="inline-form">
+                    {% csrf_token %}
+                    <button type="submit" class="danger-btn" data-confirm="Delete this event?">Delete</button>
+                  </form>
+                {% endif %}
+              </div>
             </div>
           </article>
         {% empty %}

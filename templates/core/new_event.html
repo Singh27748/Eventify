@@ -204,7 +204,14 @@
         {% else %}
         <div>
           <label for="event-price">Price</label>
-          <input id="event-price" type="number" name="price" min="0" value="{{ event.price|default:'' }}" required />
+          <input
+            id="event-price"
+            type="number"
+            name="price"
+            min="{{ price_min|default:1 }}"
+            value="{{ event.price|default:'' }}"
+            required
+          />
         </div>
         {% if show_ticket_types %}
           {{ ticket_type_rows|json_script:"ticket-type-rows-data" }}
@@ -266,13 +273,15 @@
               var rowsDataNode = document.getElementById("ticket-type-rows-data");
               var rowsWrap = document.getElementById("ticket-type-rows");
               var priceField = document.getElementById("event-price");
-              var countWrap = document.querySelector("[data-ticket-count-wrap]");
-              var countInput = document.querySelector("[data-ticket-type-count]");
-              var builder = document.querySelector("[data-ticket-type-builder]");
-              var emptyNote = document.querySelector("[data-ticket-empty-note]");
-              var modeInputs = document.querySelectorAll("[data-ticket-mode-toggle]");
-              var modeCards = document.querySelectorAll("[data-ticket-mode-card]");
-              if (!rowsWrap || !priceField || !countWrap || !countInput || !builder || !modeInputs.length) return;
+                var countWrap = document.querySelector("[data-ticket-count-wrap]");
+                var countInput = document.querySelector("[data-ticket-type-count]");
+                var builder = document.querySelector("[data-ticket-type-builder]");
+                var emptyNote = document.querySelector("[data-ticket-empty-note]");
+                var modeInputs = document.querySelectorAll("[data-ticket-mode-toggle]");
+                var modeCards = document.querySelectorAll("[data-ticket-mode-card]");
+                if (!rowsWrap || !priceField || !countWrap || !countInput || !builder || !modeInputs.length) return;
+                var minPrice = parseInt(priceField.getAttribute("min") || "1", 10);
+                if (isNaN(minPrice)) minPrice = 1;
 
               var defaultRows = [];
               if (rowsDataNode) {
@@ -298,8 +307,8 @@
               function normalizeRow(row, index) {
                 var quantity = parseInt(row.total_quantity || row.available_quantity || 1, 10);
                 if (!quantity || quantity < 1) quantity = 1;
-                var price = parseInt(row.price || 0, 10);
-                if (price < 0) price = 0;
+                  var price = parseInt(row.price || 0, 10);
+                  if (isNaN(price) || price < minPrice) price = minPrice;
                 var maxPerBooking = parseInt(row.max_per_booking || quantity, 10);
                 if (!maxPerBooking || maxPerBooking < 1) maxPerBooking = quantity;
                 return {
@@ -342,16 +351,16 @@
                 if (defaultRows[index]) {
                   return normalizeRow(defaultRows[index], index);
                 }
-                return normalizeRow({
-                  id: "",
-                  name: "Ticket Type " + (index + 1),
-                  total_quantity: 50,
-                  price: 0,
-                  max_per_booking: 10,
-                  sales_start: "",
-                  sales_end: ""
-                }, index);
-              }
+                  return normalizeRow({
+                    id: "",
+                    name: "Ticket Type " + (index + 1),
+                    total_quantity: 50,
+                    price: minPrice,
+                    max_per_booking: 10,
+                    sales_start: "",
+                    sales_end: ""
+                  }, index);
+                }
 
               function buildRowMarkup(index, row) {
                 var rowId = "ticket-type-" + index;
@@ -372,12 +381,12 @@
                       '<label for="' + rowId + '-quantity">Ticket Quantity</label>' +
                       '<input id="' + rowId + '-quantity" type="number" name="ticketTypeQuantity[]" min="1" value="' + escapeHtml(row.total_quantity) + '" required data-ticket-quantity-input />' +
                     '</div>' +
-                    '<div>' +
-                      '<label for="' + rowId + '-price">Ticket Price</label>' +
-                      '<input id="' + rowId + '-price" type="number" name="ticketTypePrice[]" min="0" value="' + escapeHtml(row.price) + '" required />' +
-                    '</div>' +
-                  '</article>';
-              }
+                      '<div>' +
+                        '<label for="' + rowId + '-price">Ticket Price</label>' +
+                        '<input id="' + rowId + '-price" type="number" name="ticketTypePrice[]" min="' + minPrice + '" value="' + escapeHtml(row.price) + '" required />' +
+                      '</div>' +
+                    '</article>';
+                }
 
               function renderRows(count) {
                 var safeCount = parseInt(count, 10);
@@ -448,6 +457,25 @@
             })();
           </script>
         {% endif %}
+        {% endif %}
+
+        {% if event_type != 'private' and not event.is_private %}
+        <div class="full-width requirement-box">
+          <h3>Public Event Advertisement</h3>
+          <p class="muted">Enable to request Eventify promotion. Admin approval required.</p>
+          <label class="check-row">
+            <input
+              type="checkbox"
+              name="enableAdvertisement"
+              value="1"
+              {% if advertisement_enabled %}checked{% endif %}
+            />
+            <span>Enable Advertisement</span>
+          </label>
+          {% if advertisement_status %}
+            <p class="muted">Current status: {{ advertisement_status|title }}</p>
+          {% endif %}
+        </div>
         {% endif %}
         <div class="full-width">
           <label for="event-image-file">Upload Image (optional)</label>

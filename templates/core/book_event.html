@@ -56,7 +56,7 @@
           id="book-attendee-name"
           name="attendeeName"
           type="text"
-          value="{{ request.user.first_name|default:request.user.username }}"
+          value="{{ request.user.get_full_name|default:request.user.username }}"
           title="Attendee Name"
           placeholder="Enter attendee name"
           required
